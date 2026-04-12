@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.androidsignals"
+    namespace = "com.example.androidsignalswifi"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.androidsignals"
+        applicationId = "com.example.androidsignalswifi"
         minSdk = 26
         targetSdk = 35
         versionCode = 5
