@@ -10,8 +10,8 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
 
     companion object {
         private const val DATABASE_NAME = "wifi_sniffer.db"
-        private const val DATABASE_VERSION = 1
-        
+        private const val DATABASE_VERSION = 2
+
         const val TABLE_APS = "access_points"
         const val COL_BSSID = "bssid"
         const val COL_SSID = "ssid"
@@ -20,6 +20,8 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         const val COL_EST_LON = "est_lon"
         const val COL_TOTAL_WEIGHT = "total_weight"
         const val COL_LAST_SEEN = "last_seen"
+        const val COL_IS_SECURED = "is_secured"
+        const val COL_LAST_RSSI = "last_rssi"
 
         const val TABLE_OBS = "observations"
         const val COL_ID = "id"
@@ -32,36 +34,49 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
-            "CREATE TABLE $TABLE_APS (" +
-            "$COL_BSSID TEXT PRIMARY KEY," +
-            "$COL_SSID TEXT," +
-            "$COL_FREQUENCY INTEGER," +
-            "$COL_EST_LAT REAL," +
-            "$COL_EST_LON REAL," +
-            "$COL_TOTAL_WEIGHT REAL," +
-            "$COL_LAST_SEEN INTEGER)"
+            "CREATE TABLE ${TABLE_APS} (" +
+            "${COL_BSSID} TEXT PRIMARY KEY," +
+            "${COL_SSID} TEXT," +
+            "${COL_FREQUENCY} INTEGER," +
+            "${COL_EST_LAT} REAL," +
+            "${COL_EST_LON} REAL," +
+            "${COL_TOTAL_WEIGHT} REAL," +
+            "${COL_IS_SECURED} INTEGER," +
+            "${COL_LAST_RSSI} INTEGER," +
+            "${COL_LAST_SEEN} INTEGER)"
         )
         db.execSQL(
-            "CREATE TABLE $TABLE_OBS (" +
-            "$COL_ID INTEGER PRIMARY KEY AUTOINCREMENT," +
-            "$COL_BSSID TEXT," +
-            "$COL_LAT REAL," +
-            "$COL_LON REAL," +
-            "$COL_RSSI INTEGER," +
-            "$COL_TIMESTAMP INTEGER)"
+            "CREATE TABLE ${TABLE_OBS} (" +
+            "${COL_ID} INTEGER PRIMARY KEY AUTOINCREMENT," +
+            "${COL_BSSID} TEXT," +
+            "${COL_LAT} REAL," +
+            "${COL_LON} REAL," +
+            "${COL_RSSI} INTEGER," +
+            "${COL_TIMESTAMP} INTEGER)"
         )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_OBS")
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_APS")
-        onCreate(db)
+        if (oldVersion < 2) {
+            // Suppose we were upgrading from 1 to 2, we would ADD columns instead of DROPPING the whole table.
+            try {
+                db.execSQL("ALTER TABLE ${TABLE_APS} ADD COLUMN ${COL_IS_SECURED} INTEGER DEFAULT 0")
+                db.execSQL("ALTER TABLE ${TABLE_APS} ADD COLUMN ${COL_LAST_RSSI} INTEGER DEFAULT -100")
+            } catch (e: Exception) {
+                // Ignore if it already exists
+            }
+        }
+        
+        // For any future upgrades (e.g. version 3), add another block:
+        // if (oldVersion < 3) {
+        //     db.execSQL("ALTER TABLE ...")
+        // }
     }
 
     fun cleanOldData() {
         val oneYearAgo = System.currentTimeMillis() - (1000L * 60 * 60 * 24 * 365)
         val db = writableDatabase
-        db.delete(TABLE_OBS, "$COL_TIMESTAMP < ?", arrayOf(oneYearAgo.toString()))
-        db.delete(TABLE_APS, "$COL_LAST_SEEN < ?", arrayOf(oneYearAgo.toString()))
+        db.delete(TABLE_OBS, "${COL_TIMESTAMP} < ?", arrayOf(oneYearAgo.toString()))
+        db.delete(TABLE_APS, "${COL_LAST_SEEN} < ?", arrayOf(oneYearAgo.toString()))
     }
 }

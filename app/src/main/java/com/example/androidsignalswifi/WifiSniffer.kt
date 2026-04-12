@@ -21,7 +21,8 @@ data class ScannedAp(
     val rssi: Int,
     val estLat: Double,
     val estLon: Double,
-    val isSecured: Boolean
+    val isSecured: Boolean,
+    val totalWeight: Double
 )
 
 class WifiSniffer(private val context: Context) {
@@ -29,12 +30,16 @@ class WifiSniffer(private val context: Context) {
     private val dbHelper = DatabaseHelper(context)
     private val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
     private val fusedLocationClient: FusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(context)
-    
+
     private val _scannedAps = MutableStateFlow<List<ScannedAp>>(emptyList())
     val scannedAps: StateFlow<List<ScannedAp>> = _scannedAps
 
     private var scanningJob: Job? = null
     private var currentLocation: Location? = null
+
+    init {
+        loadPersistedAps()
+    }
 
     private val locationCallback = object : LocationCallback() {
         override fun onLocationResult(locationResult: LocationResult) {
@@ -49,6 +54,29 @@ class WifiSniffer(private val context: Context) {
             if (success) {
                 processScanResults()
             }
+        }
+    }
+
+    @SuppressLint("Range")
+    private fun loadPersistedAps() {
+        CoroutineScope(Dispatchers.IO).launch {
+            val db = dbHelper.readableDatabase
+            val cursor = db.query(DatabaseHelper.TABLE_APS, null, null, null, null, null, DatabaseHelper.COL_LAST_SEEN + " DESC")
+            val loadedList = mutableListOf<ScannedAp>()
+            
+            while (cursor.moveToNext()) {
+                val bssid = cursor.getString(cursor.getColumnIndex(DatabaseHelper.COL_BSSID)) ?: continue
+                val ssid = cursor.getString(cursor.getColumnIndex(DatabaseHelper.COL_SSID)) ?: ""
+                val estLat = cursor.getDouble(cursor.getColumnIndex(DatabaseHelper.COL_EST_LAT))
+                val estLon = cursor.getDouble(cursor.getColumnIndex(DatabaseHelper.COL_EST_LON))
+                val totalWeight = cursor.getDouble(cursor.getColumnIndex(DatabaseHelper.COL_TOTAL_WEIGHT))
+                val isSecuredInt = cursor.getInt(cursor.getColumnIndex(DatabaseHelper.COL_IS_SECURED))
+                val lastRssi = cursor.getInt(cursor.getColumnIndex(DatabaseHelper.COL_LAST_RSSI))
+                
+                loadedList.add(ScannedAp(bssid, ssid, lastRssi, estLat, estLon, isSecuredInt == 1, totalWeight))
+            }
+            cursor.close()
+            _scannedAps.value = loadedList
         }
     }
 
@@ -86,7 +114,7 @@ class WifiSniffer(private val context: Context) {
 
         CoroutineScope(Dispatchers.IO).launch {
             val db = dbHelper.writableDatabase
-            val updatedList = mutableListOf<ScannedAp>()
+            val updatedMap = _scannedAps.value.associateBy { it.bssid }.toMutableMap()
 
             for (result in results) {
                 val bssid = result.BSSID ?: continue
@@ -128,6 +156,8 @@ class WifiSniffer(private val context: Context) {
                     put(DatabaseHelper.COL_EST_LAT, estLat)
                     put(DatabaseHelper.COL_EST_LON, estLon)
                     put(DatabaseHelper.COL_TOTAL_WEIGHT, totalWeight)
+                    put(DatabaseHelper.COL_IS_SECURED, if (isSecured) 1 else 0)
+                    put(DatabaseHelper.COL_LAST_RSSI, rssi)
                     put(DatabaseHelper.COL_LAST_SEEN, ts)
                 }
 
@@ -142,10 +172,10 @@ class WifiSniffer(private val context: Context) {
                 }
                 db.insert(DatabaseHelper.TABLE_OBS, null, obsValues)
 
-                updatedList.add(ScannedAp(bssid, ssid, rssi, estLat, estLon, isSecured))
+                updatedMap[bssid] = ScannedAp(bssid, ssid, rssi, estLat, estLon, isSecured, totalWeight)
             }
 
-            _scannedAps.value = updatedList.sortedByDescending { it.rssi }
+            _scannedAps.value = updatedMap.values.sortedByDescending { it.rssi }
         }
     }
 }

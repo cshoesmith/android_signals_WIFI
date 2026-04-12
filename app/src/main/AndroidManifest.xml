@@ -16,6 +16,8 @@
 
     <application
         android:allowBackup="true"
+        android:fullBackupContent="true"
+        android:hasFragileUserData="true"
         android:label="Android Signals WIFI WIFI"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
