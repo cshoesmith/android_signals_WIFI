@@ -20,7 +20,8 @@ data class ScannedAp(
     val ssid: String,
     val rssi: Int,
     val estLat: Double,
-    val estLon: Double
+    val estLon: Double,
+    val isSecured: Boolean
 )
 
 class WifiSniffer(private val context: Context) {
@@ -28,7 +29,7 @@ class WifiSniffer(private val context: Context) {
     private val dbHelper = DatabaseHelper(context)
     private val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
     private val fusedLocationClient: FusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(context)
-
+    
     private val _scannedAps = MutableStateFlow<List<ScannedAp>>(emptyList())
     val scannedAps: StateFlow<List<ScannedAp>> = _scannedAps
 
@@ -55,19 +56,15 @@ class WifiSniffer(private val context: Context) {
     fun startScanning() {
         if (scanningJob?.isActive == true) return
 
-        // Start location updates
         val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000L).build()
         fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper())
 
-        // Register Wi-Fi receiver
         context.registerReceiver(wifiScanReceiver, IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION))
 
-        // Start scanning loop
         scanningJob = CoroutineScope(Dispatchers.IO).launch {
             while (isActive) {
-                val success = wifiManager.startScan()
-                Log.d("WifiSniffer", "startScan() initiated: $success")
-                delay(10000L) // Request scan every 10 seconds
+                wifiManager.startScan()
+                delay(10000L)
             }
         }
     }
@@ -77,9 +74,7 @@ class WifiSniffer(private val context: Context) {
         scanningJob = null
         try {
             context.unregisterReceiver(wifiScanReceiver)
-        } catch (e: Exception) {
-            Log.e("WifiSniffer", "Receiver not registered", e)
-        }
+        } catch (e: Exception) {}
         fusedLocationClient.removeLocationUpdates(locationCallback)
     }
 
@@ -98,17 +93,16 @@ class WifiSniffer(private val context: Context) {
                 val ssid = result.SSID ?: ""
                 val rssi = result.level
                 val freq = result.frequency
+                val caps = result.capabilities ?: ""
+                val isSecured = caps.contains("WEP") || caps.contains("WPA") || caps.contains("EAP") || caps.contains("SAE") || caps.contains("OWE")
 
-                // Calculate weight based on RSSI (e.g., -40 dBm -> high weight, -100 dBm -> low weight)
-                // Normalize RSSI to a scale of roughly 1 to 60 for weight
-                val newWeight = Math.max(1.0, 100.0 + rssi) 
+                val newWeight = Math.max(1.0, 100.0 + rssi)
 
-                // Fetch existing AP from DB
                 val cursor = db.query(
-                    DatabaseHelper.TABLE_APS, 
+                    DatabaseHelper.TABLE_APS,
                     arrayOf(DatabaseHelper.COL_EST_LAT, DatabaseHelper.COL_EST_LON, DatabaseHelper.COL_TOTAL_WEIGHT),
-                    "${DatabaseHelper.COL_BSSID} = ?", 
-                    arrayOf(bssid), 
+                    "${DatabaseHelper.COL_BSSID} = ?",
+                    arrayOf(bssid),
                     null, null, null
                 )
 
@@ -127,7 +121,6 @@ class WifiSniffer(private val context: Context) {
                 }
                 cursor.close()
 
-                // Insert or update AP
                 val apValues = ContentValues().apply {
                     put(DatabaseHelper.COL_BSSID, bssid)
                     put(DatabaseHelper.COL_SSID, ssid)
@@ -137,15 +130,9 @@ class WifiSniffer(private val context: Context) {
                     put(DatabaseHelper.COL_TOTAL_WEIGHT, totalWeight)
                     put(DatabaseHelper.COL_LAST_SEEN, ts)
                 }
-                
-                db.insertWithOnConflict(
-                    DatabaseHelper.TABLE_APS, 
-                    null, 
-                    apValues, 
-                    android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE
-                )
 
-                // Insert observation
+                db.insertWithOnConflict(DatabaseHelper.TABLE_APS, null, apValues, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
+
                 val obsValues = ContentValues().apply {
                     put(DatabaseHelper.COL_BSSID, bssid)
                     put(DatabaseHelper.COL_LAT, loc.latitude)
@@ -155,9 +142,9 @@ class WifiSniffer(private val context: Context) {
                 }
                 db.insert(DatabaseHelper.TABLE_OBS, null, obsValues)
 
-                updatedList.add(ScannedAp(bssid, ssid, rssi, estLat, estLon))
+                updatedList.add(ScannedAp(bssid, ssid, rssi, estLat, estLon, isSecured))
             }
-            
+
             _scannedAps.value = updatedList.sortedByDescending { it.rssi }
         }
     }
