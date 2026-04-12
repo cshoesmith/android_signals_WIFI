@@ -168,20 +168,27 @@ fun MainScreen(wifiSniffer: WifiSniffer) {
 
         // Middle Status Banner
         if (lastScan > 0L) {
+            val dateStr = java.text.SimpleDateFormat("MMM dd, yyyy", java.util.Locale.getDefault()).format(java.util.Date(lastScan))
             val timeStr = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(lastScan))
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .windowInsetsPadding(WindowInsets.navigationBars)
-                    .padding(bottom = 88.dp) // Sits safely above the middle buttons
+                    .padding(bottom = 80.dp) // Align perfectly with the ScanTimerClock box
+                    .height(56.dp)
                     .background(Color.Black.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .padding(horizontal = 16.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Text("Last scan: $timeStr", color = Color.White, fontSize = 12.sp)
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text("Last Scan:", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                    Text("$dateStr $timeStr", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
-
-        // Bottom Bar Area containing floating action buttons
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -274,8 +281,11 @@ fun MainScreen(wifiSniffer: WifiSniffer) {
                                     Text("SSID: ${if(ap.ssid.isNotEmpty()) ap.ssid else "[Hidden]"}", fontWeight = FontWeight.Bold)
                                     Text("BSSID: ${ap.bssid}  ->  Vendor: ${VendorLookup.getVendor(ap.bssid)}")
                                     Text("RSSI: ${ap.rssi} dBm | Weight: ${ap.totalWeight.toInt()}")
-                                    Text("Security: ${if (ap.isSecured) "Secured (${ap.securityType})" else "Open"}")
-                                    Divider(modifier = Modifier.padding(top = 8.dp))
+                                    
+                                    val secText = if (ap.securityType.isNotEmpty()) ap.securityType else if (ap.isSecured) "Secured" else "Open"
+                                    Text("Security: $secText")
+                                    
+                                    HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
                                 }
                             }
                         }

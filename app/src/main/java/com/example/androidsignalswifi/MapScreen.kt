@@ -91,18 +91,20 @@ fun MapScreen(aps: List<ScannedAp>, centerTrigger: Int, currentLocation: Locatio
                 val ssids = group.map { if(it.ssid.isNotEmpty()) it.ssid else "[Hidden]" }.distinct().joinToString(", ")
                 val isSecured = group.any { it.isSecured }
                 val securityText = if (isSecured) "Secured" else "Open"
-                
-                val snippetText = group.joinToString("\n") { 
-                    val secText = if (it.securityType.isNotEmpty()) " - ${it.securityType}" else if (it.isSecured) " - Secured" else " - Open"
-                    "${it.ssid.takeIf { s -> s.isNotEmpty() } ?: "[Hidden]"} (${it.bssid})$secText (Wt: ${it.totalWeight.toInt()})" 
-                } + "\n\nVendor: ${VendorLookup.getVendor(primaryAp.bssid)}"
+
+                val titleText = "Vendor: ${VendorLookup.getVendor(primaryAp.bssid)} (Location Wt: ${group.sumOf { it.totalWeight }.toInt()})"
+                val snippetText = group.joinToString("\n") {
+                    val secText = if (it.securityType.isNotEmpty()) it.securityType else if (it.isSecured) "Secured" else "Open"
+                    val ssidName = it.ssid.takeIf { s -> s.isNotEmpty() } ?: "Hidden"
+                    "[$ssidName] ${it.bssid} - $secText" 
+                }
 
                 val circle = Polygon(mapView).apply {
                     points = Polygon.pointsAsCircle(point, radiusMeters)
                     fillPaint.color = Color.argb(100, r, g, b)
                     outlinePaint.color = Color.argb(255, r, g, b)
                     outlinePaint.strokeWidth = 3.0f
-                    title = "Router: $ssids ($securityText)"
+                    title = titleText
                     snippet = snippetText
                 }
                 mapView.overlays.add(circle)
