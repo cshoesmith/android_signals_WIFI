@@ -37,7 +37,8 @@ fun MapScreen(aps: List<ScannedAp>, centerTrigger: Int, currentLocation: Locatio
     Configuration.getInstance().load(context, context.getSharedPreferences("osmdroid", 0))
 
     var mapViewState by remember { mutableStateOf<MapView?>(null) }
-    
+    var initialCenterSet by remember { mutableStateOf(false) }
+
     LaunchedEffect(centerTrigger) {
         if (centerTrigger > 0) {
             val mv = mapViewState
@@ -122,14 +123,15 @@ fun MapScreen(aps: List<ScannedAp>, centerTrigger: Int, currentLocation: Locatio
                     mapView.overlays.add(marker)
                 }
             }
-            
-            // Only set center on the VERY FIRST load before centerTrigger happens
-            if (centerTrigger == 0 && centerPoint != null && mapView.overlays.isNotEmpty()) {
+
+            // Only set center on the VERY FIRST load
+            if (!initialCenterSet && centerPoint != null) {
                 if (currentLocation != null) {
                     mapView.controller.setCenter(GeoPoint(currentLocation.latitude, currentLocation.longitude))
                 } else {
                     mapView.controller.setCenter(centerPoint)
                 }
+                initialCenterSet = true
             }
 
             mapView.invalidate()
