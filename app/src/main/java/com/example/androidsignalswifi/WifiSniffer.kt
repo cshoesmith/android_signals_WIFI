@@ -22,7 +22,8 @@ data class ScannedAp(
     val estLat: Double,
     val estLon: Double,
     val isSecured: Boolean,
-    val totalWeight: Double
+    val totalWeight: Double,
+    val securityType: String
 )
 
 class WifiSniffer(private val context: Context) {
@@ -34,8 +35,11 @@ class WifiSniffer(private val context: Context) {
     private val _scannedAps = MutableStateFlow<List<ScannedAp>>(emptyList())
     val scannedAps: StateFlow<List<ScannedAp>> = _scannedAps
 
+    private val _lastScanTime = MutableStateFlow(0L)
+    val lastScanTime: StateFlow<Long> = _lastScanTime
+
     private var scanningJob: Job? = null
-    private var currentLocation: Location? = null
+    var currentLocation: Location? = null
 
     init {
         loadPersistedAps()
@@ -72,8 +76,10 @@ class WifiSniffer(private val context: Context) {
                 val totalWeight = cursor.getDouble(cursor.getColumnIndex(DatabaseHelper.COL_TOTAL_WEIGHT))
                 val isSecuredInt = cursor.getInt(cursor.getColumnIndex(DatabaseHelper.COL_IS_SECURED))
                 val lastRssi = cursor.getInt(cursor.getColumnIndex(DatabaseHelper.COL_LAST_RSSI))
-                
-                loadedList.add(ScannedAp(bssid, ssid, lastRssi, estLat, estLon, isSecuredInt == 1, totalWeight))
+                val secTypeIndex = cursor.getColumnIndex(DatabaseHelper.COL_SECURITY_TYPE)
+                val securityType = if (secTypeIndex >= 0) cursor.getString(secTypeIndex) ?: "" else ""
+
+                loadedList.add(ScannedAp(bssid, ssid, lastRssi, estLat, estLon, isSecuredInt == 1, totalWeight, securityType))
             }
             cursor.close()
             _scannedAps.value = loadedList
@@ -91,6 +97,7 @@ class WifiSniffer(private val context: Context) {
 
         scanningJob = CoroutineScope(Dispatchers.IO).launch {
             while (isActive) {
+                _lastScanTime.value = System.currentTimeMillis()
                 wifiManager.startScan()
                 delay(10000L)
             }
@@ -123,6 +130,17 @@ class WifiSniffer(private val context: Context) {
                 val freq = result.frequency
                 val caps = result.capabilities ?: ""
                 val isSecured = caps.contains("WEP") || caps.contains("WPA") || caps.contains("EAP") || caps.contains("SAE") || caps.contains("OWE")
+
+                val securityType = when {
+                    caps.contains("WPA3") || caps.contains("SAE") -> "WPA3"
+                    caps.contains("WPA2") -> "WPA2"
+                    caps.contains("WPA") -> "WPA"
+                    caps.contains("WEP") -> "WEP"
+                    caps.contains("OWE") -> "OWE"
+                    caps.contains("EAP") -> "EAP"
+                    else -> "Open"
+                }
+
 
                 val newWeight = Math.max(1.0, 100.0 + rssi)
 
@@ -159,6 +177,7 @@ class WifiSniffer(private val context: Context) {
                     put(DatabaseHelper.COL_IS_SECURED, if (isSecured) 1 else 0)
                     put(DatabaseHelper.COL_LAST_RSSI, rssi)
                     put(DatabaseHelper.COL_LAST_SEEN, ts)
+                    put(DatabaseHelper.COL_SECURITY_TYPE, securityType)
                 }
 
                 db.insertWithOnConflict(DatabaseHelper.TABLE_APS, null, apValues, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
@@ -172,10 +191,13 @@ class WifiSniffer(private val context: Context) {
                 }
                 db.insert(DatabaseHelper.TABLE_OBS, null, obsValues)
 
-                updatedMap[bssid] = ScannedAp(bssid, ssid, rssi, estLat, estLon, isSecured, totalWeight)
+                updatedMap[bssid] = ScannedAp(bssid, ssid, rssi, estLat, estLon, isSecured, totalWeight, securityType)
             }
 
             _scannedAps.value = updatedMap.values.sortedByDescending { it.rssi }
         }
     }
 }
+
+
+

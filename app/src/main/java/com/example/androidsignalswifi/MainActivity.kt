@@ -13,9 +13,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -44,55 +48,61 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
+        VendorLookup.init(this) // Load MAC vendors async
+
         wifiSniffer = WifiSniffer(this)
 
         checkPermissionsAndStart()
 
         setContent {
-            var showSplash by remember { mutableStateOf(true) }
-
-            LaunchedEffect(key1 = true) {
-                delay(2000)
-                showSplash = false
-            }
-
             MaterialTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    if (showSplash) {
-                        SplashScreen()
-                    } else {
-                        val scannedAps by wifiSniffer.scannedAps.collectAsState()
-                        MainScreenWithDrawer(scannedAps = scannedAps)
-                    }
+                var showSplash by rememberSaveable { mutableStateOf(true) }
+
+                LaunchedEffect(Unit) {
+                    delay(2000)
+                    showSplash = false
+                }
+
+                if (showSplash) {
+                    SplashScreen()
+                } else {
+                    MainScreen(wifiSniffer)
                 }
             }
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        wifiSniffer.stopScanning()
-    }
-
     private fun checkPermissionsAndStart() {
-        val permissions = arrayOf(
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION,
-            Manifest.permission.ACCESS_WIFI_STATE,
-            Manifest.permission.CHANGE_WIFI_STATE
+        val fineLocationPermission = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_FINE_LOCATION
         )
-
-        val missingPermissions = permissions.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-
-        if (missingPermissions.isNotEmpty()) {
-            requestPermissionLauncher.launch(missingPermissions.toTypedArray())
-        } else {
+        if (fineLocationPermission == PackageManager.PERMISSION_GRANTED) {
             wifiSniffer.startScanning()
+        } else {
+            requestPermissionLauncher.launch(
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+            )
+        }
+    }
+}
+
+@Composable
+fun SplashScreen() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.White),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Image(
+                painter = painterResource(id = R.drawable.ic_launcher_foreground),
+                contentDescription = "App Logo",
+                modifier = Modifier.size(150.dp)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text("Android Signals WIFI", fontSize = 24.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -102,17 +112,21 @@ enum class TriangulationFilter { ALL, LEARNING, KNOWN }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreenWithDrawer(scannedAps: List<ScannedAp>) {
+fun MainScreen(wifiSniffer: WifiSniffer) {
+    val aps by wifiSniffer.scannedAps.collectAsState()
+    val lastScan by wifiSniffer.lastScanTime.collectAsState()
+    
     var secFilter by remember { mutableStateOf(SecurityFilter.ALL) }
     var triFilter by remember { mutableStateOf(TriangulationFilter.ALL) }
     
+    var showSecurityMenu by remember { mutableStateOf(false) }
+    var showTriangulationMenu by remember { mutableStateOf(false) }
+    var centerTrigger by remember { mutableIntStateOf(0) }
+
     var showList by remember { mutableStateOf(false) }
-    var showBottomSheet by remember { mutableStateOf(false) }
-    
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
     val scope = rememberCoroutineScope()
 
-    val filteredAps = scannedAps.filter { ap ->
+    val filteredAps = aps.filter { ap ->
         val passSec = when (secFilter) {
             SecurityFilter.ALL -> true
             SecurityFilter.OPEN -> !ap.isSecured
@@ -128,7 +142,7 @@ fun MainScreenWithDrawer(scannedAps: List<ScannedAp>) {
 
     Box(modifier = Modifier.fillMaxSize()) {
         // Map behind everything
-        MapScreen(aps = filteredAps)
+        MapScreen(aps = filteredAps, centerTrigger = centerTrigger, currentLocation = wifiSniffer.currentLocation)
 
         // Top Badges mapping the exact states we're in
         Row(
@@ -141,106 +155,87 @@ fun MainScreenWithDrawer(scannedAps: List<ScannedAp>) {
         ) {
             InputChip(
                 selected = true,
-                onClick = { showBottomSheet = true },
-                label = { Text("Security: \") },
+                onClick = { showSecurityMenu = true },
+                label = { Text("Security: ${secFilter.name}") },
                 modifier = Modifier.padding(end = 8.dp)
             )
             InputChip(
                 selected = true,
-                onClick = { showBottomSheet = true },
-                label = { Text("Triangulation: \") }
+                onClick = { showTriangulationMenu = true },
+                label = { Text("Triangulation: ${triFilter.name}") }
             )
         }
 
-        // Bottom Bar Area containing filter button and list button
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(16.dp)
-                .fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            FloatingActionButton(onClick = { showBottomSheet = true }) {
-                Icon(Icons.Filled.FilterList, contentDescription = "Menu")
-            }
-            
-            FloatingActionButton(onClick = { showList = true }) {
-                Text("List (\)", modifier = Modifier.padding(horizontal = 16.dp))
+        // Middle Status Banner
+        if (lastScan > 0L) {
+            val timeStr = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(lastScan))
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    .padding(bottom = 88.dp) // Sits safely above the middle buttons
+                    .background(Color.Black.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text("Last scan: $timeStr", color = Color.White, fontSize = 12.sp)
             }
         }
 
-        if (showBottomSheet) {
-            ModalBottomSheet(
-                onDismissRequest = { showBottomSheet = false },
-                sheetState = sheetState
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                        .padding(bottom = 32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+        // Bottom Bar Area containing floating action buttons
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(16.dp)
+                .fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Bottom
+        ) {
+            // Security Filter Button
+            Box {
+                FloatingActionButton(onClick = { showSecurityMenu = true }) {
+                    Icon(Icons.Filled.Lock, contentDescription = "Security Filter")
+                }
+                DropdownMenu(
+                    expanded = showSecurityMenu,
+                    onDismissRequest = { showSecurityMenu = false }
                 ) {
-                    Text("Filter Settings", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.height(24.dp))
-                    
-                    Text("Security", fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.Start))
-                    Spacer(modifier = Modifier.height(8.dp))
-                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        SegmentedButton(
-                            selected = secFilter == SecurityFilter.ALL,
-                            onClick = { secFilter = SecurityFilter.ALL },
-                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3)
-                        ) { Text("All") }
-                        SegmentedButton(
-                            selected = secFilter == SecurityFilter.OPEN,
-                            onClick = { secFilter = SecurityFilter.OPEN },
-                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3)
-                        ) { Text("Open") }
-                        SegmentedButton(
-                            selected = secFilter == SecurityFilter.SECURED,
-                            onClick = { secFilter = SecurityFilter.SECURED },
-                            shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3)
-                        ) { Text("Secured") }
-                    }
-                    
-                    Spacer(modifier = Modifier.height(24.dp))
-                    
-                    Text("Triangulation Status", fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.Start))
-                    Spacer(modifier = Modifier.height(8.dp))
-                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        SegmentedButton(
-                            selected = triFilter == TriangulationFilter.ALL,
-                            onClick = { triFilter = TriangulationFilter.ALL },
-                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3)
-                        ) { Text("All") }
-                        SegmentedButton(
-                            selected = triFilter == TriangulationFilter.LEARNING,
-                            onClick = { triFilter = TriangulationFilter.LEARNING },
-                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3)
-                        ) { Text("Learning") }
-                        SegmentedButton(
-                            selected = triFilter == TriangulationFilter.KNOWN,
-                            onClick = { triFilter = TriangulationFilter.KNOWN },
-                            shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3)
-                        ) { Text("Known") }
-                    }
-                    
-                    Spacer(modifier = Modifier.height(24.dp))
-                    Button(
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = {
-                            scope.launch { sheetState.hide() }.invokeOnCompletion {
-                                if (!sheetState.isVisible) {
-                                    showBottomSheet = false
-                                }
-                            }
-                        }
-                    ) {
-                        Text("Apply & Close")
-                    }
+                    DropdownMenuItem(text = { Text("All") }, onClick = { secFilter = SecurityFilter.ALL; showSecurityMenu = false })
+                    DropdownMenuItem(text = { Text("Open") }, onClick = { secFilter = SecurityFilter.OPEN; showSecurityMenu = false })
+                    DropdownMenuItem(text = { Text("Secured") }, onClick = { secFilter = SecurityFilter.SECURED; showSecurityMenu = false })
+                }
+            }
+
+            // Triangulation Filter Button
+            Box {
+                FloatingActionButton(onClick = { showTriangulationMenu = true }) {
+                    Icon(Icons.Filled.Search, contentDescription = "Triangulation Filter")
+                }
+                DropdownMenu(
+                    expanded = showTriangulationMenu,
+                    onDismissRequest = { showTriangulationMenu = false }
+                ) {
+                    DropdownMenuItem(text = { Text("All") }, onClick = { triFilter = TriangulationFilter.ALL; showTriangulationMenu = false })
+                    DropdownMenuItem(text = { Text("Learning (<=200)") }, onClick = { triFilter = TriangulationFilter.LEARNING; showTriangulationMenu = false })
+                    DropdownMenuItem(text = { Text("Known (>200)") }, onClick = { triFilter = TriangulationFilter.KNOWN; showTriangulationMenu = false })
+                }
+            }
+
+            // Center Map Button
+            FloatingActionButton(onClick = { centerTrigger++ }) {
+                Icon(Icons.Filled.LocationOn, contentDescription = "Center Map")
+            }
+
+            // List Button with Scan Indicator
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    modifier = Modifier.size(56.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    ScanTimerClock(lastScanTime = lastScan)
+                }
+                FloatingActionButton(onClick = { showList = true }) {
+                    Icon(Icons.Filled.List, contentDescription = "List APs")
                 }
             }
         }
@@ -249,43 +244,38 @@ fun MainScreenWithDrawer(scannedAps: List<ScannedAp>) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.background)
-                    .systemBarsPadding()
+                    .background(Color.Black.copy(alpha = 0.5f))
+                    .padding(start = 16.dp, end = 16.dp, top = 32.dp, bottom = 120.dp)
             ) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Discovered APs (\)", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                        TextButton(onClick = { showList = false }) { Text("Close") }
-                    }
-                    LazyColumn(
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(horizontal = 16.dp)
+                            .padding(16.dp)
                     ) {
-                        items(filteredAps) { ap ->
-                            Card(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                            ) {
-                                Column(modifier = Modifier.padding(12.dp)) {
-                                    val ssidDisp = if (ap.ssid.isEmpty()) "[Hidden]" else ap.ssid
-                                    val triangState = if (ap.totalWeight > 200.0) "Known" else "Learning"
-                                    Text(text = "SSID: \", fontWeight = FontWeight.Bold)
-                                    Text(text = "BSSID: \", style = MaterialTheme.typography.bodyMedium)
-                                    Text(text = "RSSI: \ dBm", style = MaterialTheme.typography.bodyMedium)
-                                    val secDisp = if (ap.isSecured) "Secured" else "Open"
-                                    Text(text = "Security: \ | Triangulation: \", style = MaterialTheme.typography.bodyMedium)
-                                    Text(
-                                        text = "Est. Loc: \, \",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.secondary
-                                    )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Discovered APs (${filteredAps.size})", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            TextButton(onClick = { showList = false }) { Text("Close") }
+                        }
+                        LazyColumn(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                        ) {
+                            items(filteredAps.sortedByDescending { it.totalWeight }) { ap ->
+                                Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                                    Text("SSID: ${if(ap.ssid.isNotEmpty()) ap.ssid else "[Hidden]"}", fontWeight = FontWeight.Bold)
+                                    Text("BSSID: ${ap.bssid}  ->  Vendor: ${VendorLookup.getVendor(ap.bssid)}")
+                                    Text("RSSI: ${ap.rssi} dBm | Weight: ${ap.totalWeight.toInt()}")
+                                    Text("Security: ${if (ap.isSecured) "Secured (${ap.securityType})" else "Open"}")
+                                    Divider(modifier = Modifier.padding(top = 8.dp))
                                 }
                             }
                         }
@@ -297,31 +287,73 @@ fun MainScreenWithDrawer(scannedAps: List<ScannedAp>) {
 }
 
 @Composable
-fun SplashScreen() {
-    Box(
-        modifier = Modifier.fillMaxSize().background(Color.White),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Box(
-                modifier = Modifier
-                    .size(120.dp)
-                    .background(Color(0xFF003C8F), shape = RoundedCornerShape(percent = 50)),
-                contentAlignment = Alignment.Center
-            ) {
-                Image(
-                    painter = painterResource(id = R.drawable.ic_launcher_foreground),
-                    contentDescription = "App Icon",
-                    modifier = Modifier.fillMaxSize()
-                )
+fun ScanTimerClock(lastScanTime: Long) {
+    var currentTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(Unit) {
+        while(true) {
+            androidx.compose.runtime.withFrameMillis { 
+                currentTime = System.currentTimeMillis()
             }
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "WIFI Sniffer",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.Black
-            )
         }
     }
+
+    val elapsed = (currentTime - lastScanTime).coerceAtLeast(0L)
+    val progress = (elapsed % 10000L) / 10000f
+
+    androidx.compose.foundation.Canvas(modifier = Modifier.size(56.dp)) {
+        val radius = size.minDimension / 2
+        val centerObj = center
+
+        // Transparent round background
+        drawCircle(
+            color = Color.Black.copy(alpha = 0.4f),
+            radius = radius,
+            center = centerObj
+        )
+        // Draw the rim
+        drawCircle(
+            color = Color.White.copy(alpha = 0.5f),
+            radius = radius,
+            center = centerObj,
+            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx())
+        )
+
+        // Calculate angle (-90 starts at 12 o'clock)
+        val angleRad = (progress * 360f - 90f) * (Math.PI / 180f).toFloat()
+
+        // Clock hand line
+        val handLength = radius * 0.8f
+        val x = centerObj.x + handLength * kotlin.math.cos(angleRad.toDouble()).toFloat()
+        val y = centerObj.y + handLength * kotlin.math.sin(angleRad.toDouble()).toFloat()
+
+        // Trailing shadow
+        drawArc(
+            color = Color.Black.copy(alpha = 0.5f),
+            startAngle = -90f,
+            sweepAngle = progress * 360f,
+            useCenter = true,
+            topLeft = androidx.compose.ui.geometry.Offset(centerObj.x - radius, centerObj.y - radius),
+            size = androidx.compose.ui.geometry.Size(radius * 2, radius * 2)
+        )
+
+        drawLine(
+            color = Color.White,
+            start = centerObj,
+            end = androidx.compose.ui.geometry.Offset(x, y),
+            strokeWidth = 3.dp.toPx(),
+            cap = androidx.compose.ui.graphics.StrokeCap.Round
+        )
+
+        // Small center dot
+        drawCircle(
+            color = Color.White,
+            radius = 3.dp.toPx()
+        )
+    }
 }
+
+
+
+
+

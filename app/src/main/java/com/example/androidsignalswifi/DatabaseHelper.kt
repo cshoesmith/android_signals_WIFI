@@ -10,7 +10,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
 
     companion object {
         private const val DATABASE_NAME = "wifi_sniffer.db"
-        private const val DATABASE_VERSION = 2
+        private const val DATABASE_VERSION = 3
 
         const val TABLE_APS = "access_points"
         const val COL_BSSID = "bssid"
@@ -22,6 +22,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         const val COL_LAST_SEEN = "last_seen"
         const val COL_IS_SECURED = "is_secured"
         const val COL_LAST_RSSI = "last_rssi"
+        const val COL_SECURITY_TYPE = "security_type"
 
         const val TABLE_OBS = "observations"
         const val COL_ID = "id"
@@ -43,6 +44,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
             "${COL_TOTAL_WEIGHT} REAL," +
             "${COL_IS_SECURED} INTEGER," +
             "${COL_LAST_RSSI} INTEGER," +
+            "${COL_SECURITY_TYPE} TEXT," +
             "${COL_LAST_SEEN} INTEGER)"
         )
         db.execSQL(
@@ -58,19 +60,16 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
-            // Suppose we were upgrading from 1 to 2, we would ADD columns instead of DROPPING the whole table.
             try {
                 db.execSQL("ALTER TABLE ${TABLE_APS} ADD COLUMN ${COL_IS_SECURED} INTEGER DEFAULT 0")
                 db.execSQL("ALTER TABLE ${TABLE_APS} ADD COLUMN ${COL_LAST_RSSI} INTEGER DEFAULT -100")
-            } catch (e: Exception) {
-                // Ignore if it already exists
-            }
+            } catch (e: Exception) {}
         }
-        
-        // For any future upgrades (e.g. version 3), add another block:
-        // if (oldVersion < 3) {
-        //     db.execSQL("ALTER TABLE ...")
-        // }
+        if (oldVersion < 3) {
+            try {
+                db.execSQL("ALTER TABLE ${TABLE_APS} ADD COLUMN ${COL_SECURITY_TYPE} TEXT DEFAULT ''")
+            } catch (e: Exception) {}
+        }
     }
 
     fun cleanOldData() {

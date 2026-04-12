@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+
+<html lang="en-CA">
+<head><base href="/"/><script id="wayback-polyfill">(function(){
+var g=typeof window!="undefined"?window:typeof self!="undefined"?self:this;
+if(!g._wb_wombat){g._wb_wombat={local_init:function(n){return g[n]||g;}};}
+if(typeof _____WB$wombat$assign$function_____==="undefined"){
+g["_____WB$wombat$assign$function_____"]=function(n){return(g._wb_wombat&&g._wb_wombat.local_init&&g._wb_wombat.local_init(n))||g[n]||g;};
+}
+if(!g.__WB_pmw){g.__WB_pmw=function(obj){this.__WB_source=obj;return this;}};
+})();setTimeout(function(){var b=document.body;if(b&&!b.classList.contains("loaded")){b.classList.add("loaded");}},3000);</script>
+<meta content="text/html; charset=utf-8" http-equiv="Content-Type"/>
+<title>linuxnet.ca - Linux Professionals</title>
+<meta content="Resources for Linux professionals" name="description"/>
+<meta content="David B. Ferguson" name="author"/>
+<meta content="David B. Ferguson" name="designer"/>
+<meta content="General" name="rating"/>
+<meta content="index,follow" name="robots"/>
+<meta content="7 days" name="revisit-after"/>
+<meta content="width=device-width" name="viewport"/>
+<meta content="#3C79AA" name="theme-color"/>
+<link href="css/default-min.css" media="screen" rel="stylesheet"/>
+</head>
+<body>
+<div id="page">
+<a class="skip-link screen-reader-text" href="#content">Skip to content</a>
+<div id="header" role="banner">
+<p id="sitename"><a href="/index.html">linuxnet.ca</a></p>
+<p id="lpros">Linux Professionals</p>
+</div>
+<div id="content" role="main">
+<h1 class="velum">linuxnet.ca</h1>
+<h2>Networking</h2>
+<ul class="urls">
+<li><a href="/rir.html">Regional Internet Registry (RIR) Map</a></li>
+<li><a href="/ieee/oui.html">Sanitized IEEE OUI Data (oui.txt)</a>
+<ul>
+<li><a href="/ieee/oui.html">oui.txt Downloads</a></li>
+<li><a href="/ieee/oui.html">Sanitized oui.txt Update Client Download</a></li>
+<li><a href="/ieee/oui.html">Nmap MAC Prefixes (nmap-mac-prefixes)</a></li>
+<li><a href="/ieee/oui.html">Arpwatch (ethercodes.dat)</a></li>
+<li><a href="/ieee/oui.html">Arp-scan (ieee-oui.txt)</a></li>
+</ul>
+</li>
+<li>NeDi (network discovery) project
+              <ul>
+<li>NeDi Wiki document on <abbr title="Technical University of Denmark (Danmarks Tekniske Universitet)">DTU</abbr> Fysik IT-Wiki</li>
+</ul>
+</li>
+<li>Hurricane Electric BGP Toolkit</li>
+<li>Oskar Andreasson's Iptables Tutorial</li>
+</ul>
+<br/>
+<h2>Internet Mail</h2>
+<ul class="urls">
+<li><a href="/postfix/dedicated_transport.html">Postfix Dedicated Transport Howto</a></li>
+<li><a href="/postfix/pflogsumm_metalog.html">Pflogsumm Metalog Howto</a></li>
+<li><a href="/postfix/attachment.html">Command line email file attachment bash script</a></li>
+</ul>
+<br/>
+<h2>Web Applications</h2>
+<ul class="urls">
+<li><a href="/discount.html">Retail Discount Calculator</a> - Web application for calculating ad hoc retail sales discounts.</li>
+<li>Gross Profit Margin Calculator - Web application for calculating real-time Gross Profit Margin sales figures on desktop computers and mobile devices to help keep your profit margin in check.</li>
+</ul>
+<div id="tuxlogo"></div>
+</div>
+<div id="footer" role="contentinfo">
+<p id="copyright">Linux ® registered trademark of Linus Torvalds.<br/>Copyright © 2019 linuxnet.ca All Rights Reserved.</p>
+</div>
+</div>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"64cbe8ba7ca34a5685fb07e281d4661a","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>
