@@ -10,7 +10,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
 
     companion object {
         private const val DATABASE_NAME = "wifi_sniffer.db"
-        private const val DATABASE_VERSION = 3
+        private const val DATABASE_VERSION = 4
 
         const val TABLE_APS = "access_points"
         const val COL_BSSID = "bssid"
@@ -23,6 +23,8 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         const val COL_IS_SECURED = "is_secured"
         const val COL_LAST_RSSI = "last_rssi"
         const val COL_SECURITY_TYPE = "security_type"
+        const val COL_WIFI_STANDARD = "wifi_standard"
+        const val COL_CAPABILITIES = "capabilities"
 
         const val TABLE_OBS = "observations"
         const val COL_ID = "id"
@@ -45,6 +47,8 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
             "${COL_IS_SECURED} INTEGER," +
             "${COL_LAST_RSSI} INTEGER," +
             "${COL_SECURITY_TYPE} TEXT," +
+            "${COL_WIFI_STANDARD} TEXT," +
+            "${COL_CAPABILITIES} TEXT," +
             "${COL_LAST_SEEN} INTEGER)"
         )
         db.execSQL(
@@ -68,6 +72,12 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         if (oldVersion < 3) {
             try {
                 db.execSQL("ALTER TABLE ${TABLE_APS} ADD COLUMN ${COL_SECURITY_TYPE} TEXT DEFAULT ''")
+            } catch (e: Exception) {}
+        }
+        if (oldVersion < 4) {
+            try {
+                db.execSQL("ALTER TABLE ${TABLE_APS} ADD COLUMN ${COL_WIFI_STANDARD} TEXT DEFAULT 'Unknown'")
+                db.execSQL("ALTER TABLE ${TABLE_APS} ADD COLUMN ${COL_CAPABILITIES} TEXT DEFAULT ''")
             } catch (e: Exception) {}
         }
     }

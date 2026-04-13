@@ -23,7 +23,10 @@ data class ScannedAp(
     val estLon: Double,
     val isSecured: Boolean,
     val totalWeight: Double,
-    val securityType: String
+    val securityType: String,
+    val frequency: Int,
+    val wifiStandard: String,
+    val capabilities: String
 )
 
 class WifiSniffer(private val context: Context) {
@@ -82,7 +85,16 @@ class WifiSniffer(private val context: Context) {
                 val secTypeIndex = cursor.getColumnIndex(DatabaseHelper.COL_SECURITY_TYPE)
                 val securityType = if (secTypeIndex >= 0) cursor.getString(secTypeIndex) ?: "" else ""
 
-                loadedList.add(ScannedAp(bssid, ssid, lastRssi, estLat, estLon, isSecuredInt == 1, totalWeight, securityType))
+                val freqIndex = cursor.getColumnIndex(DatabaseHelper.COL_FREQUENCY)
+                val freq = if (freqIndex >= 0) cursor.getInt(freqIndex) else 0
+
+                val stdIndex = cursor.getColumnIndex(DatabaseHelper.COL_WIFI_STANDARD)
+                val wifiStandard = if (stdIndex >= 0) cursor.getString(stdIndex) ?: "Unknown" else "Unknown"
+
+                val capIndex = cursor.getColumnIndex(DatabaseHelper.COL_CAPABILITIES)
+                val caps = if (capIndex >= 0) cursor.getString(capIndex) ?: "" else ""
+
+                loadedList.add(ScannedAp(bssid, ssid, lastRssi, estLat, estLon, isSecuredInt == 1, totalWeight, securityType, freq, wifiStandard, caps))
             }
             cursor.close()
             _scannedAps.value = loadedList
@@ -136,6 +148,21 @@ class WifiSniffer(private val context: Context) {
                 val caps = result.capabilities ?: ""
                 val isSecured = caps.contains("WEP") || caps.contains("WPA") || caps.contains("EAP") || caps.contains("SAE") || caps.contains("OWE")
 
+                val wifiStandard = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                    when (result.wifiStandard) {
+                        android.net.wifi.ScanResult.WIFI_STANDARD_11AX -> "Wi-Fi 6 (802.11ax)"
+                        android.net.wifi.ScanResult.WIFI_STANDARD_11AC -> "Wi-Fi 5 (802.11ac)"
+                        android.net.wifi.ScanResult.WIFI_STANDARD_11N -> "Wi-Fi 4 (802.11n)"
+                        android.net.wifi.ScanResult.WIFI_STANDARD_11G -> "802.11g"
+                        android.net.wifi.ScanResult.WIFI_STANDARD_11B -> "802.11b"
+                        android.net.wifi.ScanResult.WIFI_STANDARD_11A -> "802.11a"
+                        8 /* WIFI_STANDARD_11BE on API 33+ */ -> "Wi-Fi 7 (802.11be)"
+                        else -> "Unknown"
+                    }
+                } else {
+                    "Legacy"
+                }
+
                 val securityType = when {
                     caps.contains("WPA3") || caps.contains("SAE") -> "WPA3"
                     caps.contains("WPA2") -> "WPA2"
@@ -183,6 +210,8 @@ class WifiSniffer(private val context: Context) {
                     put(DatabaseHelper.COL_LAST_RSSI, rssi)
                     put(DatabaseHelper.COL_LAST_SEEN, ts)
                     put(DatabaseHelper.COL_SECURITY_TYPE, securityType)
+                    put(DatabaseHelper.COL_WIFI_STANDARD, wifiStandard)
+                    put(DatabaseHelper.COL_CAPABILITIES, caps)
                 }
 
                 db.insertWithOnConflict(DatabaseHelper.TABLE_APS, null, apValues, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
@@ -196,7 +225,7 @@ class WifiSniffer(private val context: Context) {
                 }
                 db.insert(DatabaseHelper.TABLE_OBS, null, obsValues)
 
-                updatedMap[bssid] = ScannedAp(bssid, ssid, rssi, estLat, estLon, isSecured, totalWeight, securityType)
+                updatedMap[bssid] = ScannedAp(bssid, ssid, rssi, estLat, estLon, isSecured, totalWeight, securityType, freq, wifiStandard, caps)
             }
 
             _scannedAps.value = updatedMap.values.sortedByDescending { it.rssi }

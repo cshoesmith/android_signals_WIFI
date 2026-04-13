@@ -173,26 +173,57 @@ fun MainScreen(wifiSniffer: WifiSniffer) {
         // Map behind everything
         MapScreen(aps = filteredAps, centerTrigger = centerTrigger, currentLocation = wifiSniffer.currentLocation)
 
-        // Top Badges mapping the exact states we're in
+        // Top Info & Badges
         Row(
             modifier = Modifier
-                .align(Alignment.TopCenter)
+                .align(Alignment.TopStart)
                 .statusBarsPadding()
                 .padding(top = 16.dp, start = 16.dp, end = 16.dp)
                 .fillMaxWidth(),
-            horizontalArrangement = Arrangement.Center
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top
         ) {
-            InputChip(
-                selected = true,
-                onClick = { showSecurityMenu = true },
-                label = { Text("Security: ${secFilter.name}") },
-                modifier = Modifier.padding(end = 8.dp)
-            )
-            InputChip(
-                selected = true,
-                onClick = { showTriangulationMenu = true },
-                label = { Text("Triangulation: ${triFilter.name}") }
-            )
+            // Left Table / Column
+            Column(
+                modifier = Modifier
+                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                    .padding(8.dp)
+            ) {
+                Text("Access Points", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                val totalSeen = aps.size
+                val totalTriangulated = filteredAps.count { it.totalWeight > 200.0 }
+                val totalOpen = filteredAps.count { !it.isSecured }
+                
+                Row(modifier = Modifier.padding(top = 4.dp)) {
+                    Text("Seen:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
+                    Text("$totalSeen", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+                Row {
+                    Text("Triangulated:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
+                    Text("$totalTriangulated", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+                Row {
+                    Text("Open:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
+                    Text("$totalOpen", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            // Right Status Pills (Stacked)
+            Column(
+                horizontalAlignment = Alignment.End
+            ) {
+                InputChip(
+                    selected = true,
+                    onClick = { showSecurityMenu = true },
+                    label = { Text("Security: ${secFilter.name}") },
+                    modifier = Modifier.padding(bottom = 0.dp)
+                )
+                InputChip(
+                    selected = true,
+                    onClick = { showTriangulationMenu = true },
+                    label = { Text("Triangulation: ${triFilter.name}") }
+                )
+            }
         }
 
         // Middle Status Banner
@@ -342,10 +373,12 @@ fun MainScreen(wifiSniffer: WifiSniffer) {
                                 Column(modifier = Modifier.padding(vertical = 8.dp)) {
                                     Text("SSID: ${if(ap.ssid.isNotEmpty()) ap.ssid else "[Hidden]"}", fontWeight = FontWeight.Bold)
                                     Text("BSSID: ${ap.bssid}  ->  Vendor: ${VendorLookup.getVendor(ap.bssid)}")
+                                    Text("Freq: ${ap.frequency} MHz | Standard: ${ap.wifiStandard}")
                                     Text("RSSI: ${ap.rssi} dBm | Weight: ${ap.totalWeight.toInt()}")
                                     
                                     val secText = if (ap.securityType.isNotEmpty()) ap.securityType else if (ap.isSecured) "Secured" else "Open"
                                     Text("Security: $secText")
+                                    Text("Caps: ${ap.capabilities}", fontSize = 12.sp, color = Color.LightGray)
                                     
                                     HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
                                 }
