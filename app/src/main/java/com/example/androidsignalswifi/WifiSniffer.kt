@@ -153,14 +153,12 @@ class WifiSniffer(private val context: Context) {
                         android.net.wifi.ScanResult.WIFI_STANDARD_11AX -> "Wi-Fi 6 (802.11ax)"
                         android.net.wifi.ScanResult.WIFI_STANDARD_11AC -> "Wi-Fi 5 (802.11ac)"
                         android.net.wifi.ScanResult.WIFI_STANDARD_11N -> "Wi-Fi 4 (802.11n)"
-                        android.net.wifi.ScanResult.WIFI_STANDARD_11G -> "802.11g"
-                        android.net.wifi.ScanResult.WIFI_STANDARD_11B -> "802.11b"
-                        android.net.wifi.ScanResult.WIFI_STANDARD_11A -> "802.11a"
+                        1 /* WIFI_STANDARD_LEGACY */ -> "Legacy (802.11a/b/g)"
                         8 /* WIFI_STANDARD_11BE on API 33+ */ -> "Wi-Fi 7 (802.11be)"
                         else -> "Unknown"
                     }
                 } else {
-                    "Legacy"
+                    "Unknown"
                 }
 
                 val securityType = when {

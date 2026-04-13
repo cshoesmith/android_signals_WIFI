@@ -100,7 +100,9 @@ fun MapScreen(aps: List<ScannedAp>, centerTrigger: Int, currentLocation: Locatio
                 val snippetText = group.joinToString("\n") {
                     val secText = if (it.securityType.isNotEmpty()) it.securityType else if (it.isSecured) "Secured" else "Open"
                     val ssidName = it.ssid.takeIf { s -> s.isNotEmpty() } ?: "Hidden"
-                    "[$ssidName] ${it.bssid} - $secText" 
+                    val freqText = "${it.frequency} MHz"
+                    val stdText = it.wifiStandard
+                    "[$ssidName] ${it.bssid} - $secText | $freqText | $stdText" 
                 }
 
                 val circle = Polygon(mapView).apply {

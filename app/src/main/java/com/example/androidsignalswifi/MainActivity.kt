@@ -136,6 +136,8 @@ fun SplashScreen() {
 
 enum class SecurityFilter { ALL, OPEN, SECURED }
 enum class TriangulationFilter { ALL, LEARNING, KNOWN }
+enum class BandFilter { ALL, BAND_2_4, BAND_5_GHZ, BAND_6_GHZ }
+enum class DeviceFilter { ALL, ROUTERS_ONLY }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -146,9 +148,13 @@ fun MainScreen(wifiSniffer: WifiSniffer) {
     
     var secFilter by remember { mutableStateOf(SecurityFilter.ALL) }
     var triFilter by remember { mutableStateOf(TriangulationFilter.ALL) }
+    var bandFilter by remember { mutableStateOf(BandFilter.ALL) }
+    var devFilter by remember { mutableStateOf(DeviceFilter.ALL) }
     
     var showSecurityMenu by remember { mutableStateOf(false) }
     var showTriangulationMenu by remember { mutableStateOf(false) }
+    var showBandMenu by remember { mutableStateOf(false) }
+    var showDevMenu by remember { mutableStateOf(false) }
     var centerTrigger by remember { mutableIntStateOf(0) }
 
     var showList by remember { mutableStateOf(false) }
@@ -166,7 +172,17 @@ fun MainScreen(wifiSniffer: WifiSniffer) {
             TriangulationFilter.LEARNING -> ap.totalWeight <= 200.0
             TriangulationFilter.KNOWN -> ap.totalWeight > 200.0
         }
-        passSec && passTri
+        val passBand = when (bandFilter) {
+            BandFilter.ALL -> true
+            BandFilter.BAND_2_4 -> ap.frequency in 2400..2499
+            BandFilter.BAND_5_GHZ -> ap.frequency in 5000..5999
+            BandFilter.BAND_6_GHZ -> ap.frequency in 5925..7125
+        }
+        val passDev = when (devFilter) {
+            DeviceFilter.ALL -> true
+            DeviceFilter.ROUTERS_ONLY -> !ap.capabilities.contains("P2P") && !ap.capabilities.contains("WFD")
+        }
+        passSec && passTri && passBand && passDev
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -212,17 +228,69 @@ fun MainScreen(wifiSniffer: WifiSniffer) {
             Column(
                 horizontalAlignment = Alignment.End
             ) {
-                InputChip(
-                    selected = true,
-                    onClick = { showSecurityMenu = true },
-                    label = { Text("Security: ${secFilter.name}") },
-                    modifier = Modifier.padding(bottom = 0.dp)
-                )
-                InputChip(
-                    selected = true,
-                    onClick = { showTriangulationMenu = true },
-                    label = { Text("Triangulation: ${triFilter.name}") }
-                )
+                Box {
+                    InputChip(
+                        selected = true,
+                        onClick = { showSecurityMenu = true },
+                        label = { Text("Security: ${secFilter.name}") },
+                        modifier = Modifier.padding(bottom = 0.dp)
+                    )
+                    DropdownMenu(
+                        expanded = showSecurityMenu,
+                        onDismissRequest = { showSecurityMenu = false }
+                    ) {
+                        DropdownMenuItem(text = { Text("All") }, onClick = { secFilter = SecurityFilter.ALL; showSecurityMenu = false })
+                        DropdownMenuItem(text = { Text("Open") }, onClick = { secFilter = SecurityFilter.OPEN; showSecurityMenu = false })
+                        DropdownMenuItem(text = { Text("Secured") }, onClick = { secFilter = SecurityFilter.SECURED; showSecurityMenu = false })
+                    }
+                }
+                Box {
+                    InputChip(
+                        selected = true,
+                        onClick = { showTriangulationMenu = true },
+                        label = { Text("Triangulation: ${triFilter.name}") },
+                        modifier = Modifier.padding(bottom = 0.dp)
+                    )
+                    DropdownMenu(
+                        expanded = showTriangulationMenu,
+                        onDismissRequest = { showTriangulationMenu = false }
+                    ) {
+                        DropdownMenuItem(text = { Text("All") }, onClick = { triFilter = TriangulationFilter.ALL; showTriangulationMenu = false })
+                        DropdownMenuItem(text = { Text("Learning (<=200)") }, onClick = { triFilter = TriangulationFilter.LEARNING; showTriangulationMenu = false })
+                        DropdownMenuItem(text = { Text("Known (>200)") }, onClick = { triFilter = TriangulationFilter.KNOWN; showTriangulationMenu = false })
+                    }
+                }
+                Box {
+                    InputChip(
+                        selected = true,
+                        onClick = { showBandMenu = true },
+                        label = { Text("Band: ${bandFilter.name}") },
+                        modifier = Modifier.padding(bottom = 0.dp)
+                    )
+                    DropdownMenu(
+                        expanded = showBandMenu,
+                        onDismissRequest = { showBandMenu = false }
+                    ) {
+                        DropdownMenuItem(text = { Text("All Bands") }, onClick = { bandFilter = BandFilter.ALL; showBandMenu = false })
+                        DropdownMenuItem(text = { Text("2.4 GHz Only") }, onClick = { bandFilter = BandFilter.BAND_2_4; showBandMenu = false })
+                        DropdownMenuItem(text = { Text("5 GHz Only") }, onClick = { bandFilter = BandFilter.BAND_5_GHZ; showBandMenu = false })
+                        DropdownMenuItem(text = { Text("6 GHz Only") }, onClick = { bandFilter = BandFilter.BAND_6_GHZ; showBandMenu = false })
+                    }
+                }
+                Box {
+                    InputChip(
+                        selected = true,
+                        onClick = { showDevMenu = true },
+                        label = { Text("Type: ${devFilter.name}") }
+                    )
+                    DropdownMenu(
+                        expanded = showDevMenu,
+                        onDismissRequest = { showDevMenu = false }
+                    ) {
+                        DropdownMenuItem(text = { Text("All Devices") }, onClick = { devFilter = DeviceFilter.ALL; showDevMenu = false })
+                        DropdownMenuItem(text = { Text("Exclude Smart TVs & Printers") }, onClick = { devFilter = DeviceFilter.ROUTERS_ONLY; showDevMenu = false })
+                    }
+                }
             }
         }
 
@@ -255,43 +323,16 @@ fun MainScreen(wifiSniffer: WifiSniffer) {
                 .windowInsetsPadding(WindowInsets.navigationBars)
                 .padding(16.dp)
                 .fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.Bottom
         ) {
-            // Security Filter Button
-            Box {
-                FloatingActionButton(onClick = { showSecurityMenu = true }) {
-                    Icon(Icons.Filled.Lock, contentDescription = "Security Filter")
-                }
-                DropdownMenu(
-                    expanded = showSecurityMenu,
-                    onDismissRequest = { showSecurityMenu = false }
-                ) {
-                    DropdownMenuItem(text = { Text("All") }, onClick = { secFilter = SecurityFilter.ALL; showSecurityMenu = false })
-                    DropdownMenuItem(text = { Text("Open") }, onClick = { secFilter = SecurityFilter.OPEN; showSecurityMenu = false })
-                    DropdownMenuItem(text = { Text("Secured") }, onClick = { secFilter = SecurityFilter.SECURED; showSecurityMenu = false })
-                }
-            }
-
-            // Triangulation Filter Button
-            Box {
-                FloatingActionButton(onClick = { showTriangulationMenu = true }) {
-                    Icon(Icons.Filled.Search, contentDescription = "Triangulation Filter")
-                }
-                DropdownMenu(
-                    expanded = showTriangulationMenu,
-                    onDismissRequest = { showTriangulationMenu = false }
-                ) {
-                    DropdownMenuItem(text = { Text("All") }, onClick = { triFilter = TriangulationFilter.ALL; showTriangulationMenu = false })
-                    DropdownMenuItem(text = { Text("Learning (<=200)") }, onClick = { triFilter = TriangulationFilter.LEARNING; showTriangulationMenu = false })
-                    DropdownMenuItem(text = { Text("Known (>200)") }, onClick = { triFilter = TriangulationFilter.KNOWN; showTriangulationMenu = false })
-                }
-            }
-
             // Play/Pause Button
-            FloatingActionButton(onClick = { 
-                if (isScanning) wifiSniffer.stopScanning() else wifiSniffer.startScanning() 
-            }) {
+            FloatingActionButton(
+                onClick = { 
+                    if (isScanning) wifiSniffer.stopScanning() else wifiSniffer.startScanning() 
+                },
+                modifier = Modifier.padding(end = 32.dp)
+            ) {
                 if (isScanning) {
                     Icon(painter = painterResource(id = android.R.drawable.ic_media_pause), contentDescription = "Pause", modifier = Modifier.size(24.dp))
                 } else {
@@ -300,22 +341,29 @@ fun MainScreen(wifiSniffer: WifiSniffer) {
             }
 
             // Center Map Button
-            FloatingActionButton(onClick = { centerTrigger++ }) {
+            FloatingActionButton(
+                onClick = { centerTrigger++ },
+                modifier = Modifier.padding(end = 32.dp)
+            ) {
                 Icon(Icons.Filled.LocationOn, contentDescription = "Center Map")
             }
 
-            // List Button with Scan Indicator
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(
-                    modifier = Modifier.size(56.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    ScanTimerClock(lastScanTime = lastScan, isScanning = isScanning)
-                }
-                FloatingActionButton(onClick = { showList = true }) {
-                    Icon(Icons.Filled.List, contentDescription = "List APs")
-                }
+            // List Button
+            FloatingActionButton(onClick = { showList = true }) {
+                Icon(Icons.Filled.List, contentDescription = "List APs")
             }
+        }
+        
+        // Scan Timer Clock on the right edge aligned with Last Scan banner
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(bottom = 80.dp, end = 16.dp)
+                .size(56.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            ScanTimerClock(lastScanTime = lastScan, isScanning = isScanning)
         }
 
         if (showInfoDialog) {
