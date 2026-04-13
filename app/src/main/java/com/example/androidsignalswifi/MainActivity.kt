@@ -28,6 +28,32 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.painterResource
+
+
+
+
+
+
+
+
+
+
+
+
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.ui.platform.LocalContext
+import android.content.pm.PackageInfo
 import androidx.core.view.WindowCompat
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -103,6 +129,7 @@ fun SplashScreen() {
             )
             Spacer(modifier = Modifier.height(16.dp))
             Text("Android Signals WIFI", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Text("by craftbeers.app", fontSize = 14.sp)
         }
     }
 }
@@ -114,6 +141,7 @@ enum class TriangulationFilter { ALL, LEARNING, KNOWN }
 @Composable
 fun MainScreen(wifiSniffer: WifiSniffer) {
     val aps by wifiSniffer.scannedAps.collectAsState()
+    val isScanning by wifiSniffer.isScanning.collectAsState()
     val lastScan by wifiSniffer.lastScanTime.collectAsState()
     
     var secFilter by remember { mutableStateOf(SecurityFilter.ALL) }
@@ -124,6 +152,7 @@ fun MainScreen(wifiSniffer: WifiSniffer) {
     var centerTrigger by remember { mutableIntStateOf(0) }
 
     var showList by remember { mutableStateOf(false) }
+    var showInfoDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     val filteredAps = aps.filter { ap ->
@@ -228,6 +257,17 @@ fun MainScreen(wifiSniffer: WifiSniffer) {
                 }
             }
 
+            // Play/Pause Button
+            FloatingActionButton(onClick = { 
+                if (isScanning) wifiSniffer.stopScanning() else wifiSniffer.startScanning() 
+            }) {
+                if (isScanning) {
+                    Icon(painter = painterResource(id = android.R.drawable.ic_media_pause), contentDescription = "Pause", modifier = Modifier.size(24.dp))
+                } else {
+                    Icon(Icons.Filled.PlayArrow, contentDescription = "Play")
+                }
+            }
+
             // Center Map Button
             FloatingActionButton(onClick = { centerTrigger++ }) {
                 Icon(Icons.Filled.LocationOn, contentDescription = "Center Map")
@@ -239,7 +279,7 @@ fun MainScreen(wifiSniffer: WifiSniffer) {
                     modifier = Modifier.size(56.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    ScanTimerClock(lastScanTime = lastScan)
+                    ScanTimerClock(lastScanTime = lastScan, isScanning = isScanning)
                 }
                 FloatingActionButton(onClick = { showList = true }) {
                     Icon(Icons.Filled.List, contentDescription = "List APs")
@@ -247,7 +287,29 @@ fun MainScreen(wifiSniffer: WifiSniffer) {
             }
         }
 
-        if (showList) {
+        if (showInfoDialog) {
+        val context = LocalContext.current
+        var versionName = "Unknown"
+        try {
+            val pInfo: PackageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            versionName = pInfo.versionName ?: "Unknown"
+        } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
+            e.printStackTrace()
+        }
+
+        AlertDialog(
+            onDismissRequest = { showInfoDialog = false },
+            title = { Text("About") },
+            text = {
+                Text("Version: " + versionName + "\nCreated by craftbeers.app\n\nLicense: MIT License")
+            },
+            confirmButton = {
+                TextButton(onClick = { showInfoDialog = false }) { Text("Close") }
+            }
+        )
+    }
+
+    if (showList) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -297,13 +359,15 @@ fun MainScreen(wifiSniffer: WifiSniffer) {
 }
 
 @Composable
-fun ScanTimerClock(lastScanTime: Long) {
+fun ScanTimerClock(lastScanTime: Long, isScanning: Boolean) {
     var currentTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
-    LaunchedEffect(Unit) {
-        while(true) {
-            androidx.compose.runtime.withFrameMillis { 
-                currentTime = System.currentTimeMillis()
+    LaunchedEffect(isScanning) {
+        if (isScanning) {
+            while(true) {
+                androidx.compose.runtime.withFrameMillis {
+                    currentTime = System.currentTimeMillis()
+                }
             }
         }
     }
@@ -367,3 +431,22 @@ fun ScanTimerClock(lastScanTime: Long) {
 
 
 
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TooltipTextRow(tooltipText: String, labelText: String, valueText: String) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = {
+            PlainTooltip {
+                Text(tooltipText)
+            }
+        },
+        state = rememberTooltipState()
+    ) {
+        Row(Modifier.fillMaxWidth()) {
+            Text(labelText, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(end = 4.dp))
+            Text(valueText, fontSize = 12.sp)
+        }
+    }
+}

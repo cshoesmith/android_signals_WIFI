@@ -70,9 +70,12 @@ fun MapScreen(aps: List<ScannedAp>, centerTrigger: Int, currentLocation: Locatio
             var centerPoint: GeoPoint? = null
             val wifiIcon = getBitmapDrawable(context, R.drawable.ic_wifi_pin)
 
-            // Group APs by the first 5 octets of their MAC address (BSSID) 
+            // Group APs by the first 5 octets of their MAC address (BSSID)
             // e.g. "00:11:22:33:44:55" and "00:11:22:33:44:56" become group "00:11:22:33:44"
+            // Then sort them by highest confidence so the smaller/more accurate spots draw on top
             val groupedAps = aps.groupBy { it.bssid.substringBeforeLast(":") }
+                .entries
+                .sortedBy { entry -> entry.value.maxOfOrNull { it.totalWeight } ?: 0.0 }
 
             for ((macPrefix, group) in groupedAps) {
                 // Use the AP with the highest confidence to anchor the router's physical position

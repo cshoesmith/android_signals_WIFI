@@ -38,6 +38,9 @@ class WifiSniffer(private val context: Context) {
     private val _lastScanTime = MutableStateFlow(0L)
     val lastScanTime: StateFlow<Long> = _lastScanTime
 
+    private val _isScanning = MutableStateFlow(false)
+    val isScanning: StateFlow<Boolean> = _isScanning
+
     private var scanningJob: Job? = null
     var currentLocation: Location? = null
 
@@ -95,6 +98,7 @@ class WifiSniffer(private val context: Context) {
 
         context.registerReceiver(wifiScanReceiver, IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION))
 
+        _isScanning.value = true
         scanningJob = CoroutineScope(Dispatchers.IO).launch {
             while (isActive) {
                 _lastScanTime.value = System.currentTimeMillis()
@@ -105,6 +109,7 @@ class WifiSniffer(private val context: Context) {
     }
 
     fun stopScanning() {
+        _isScanning.value = false
         scanningJob?.cancel()
         scanningJob = null
         try {
