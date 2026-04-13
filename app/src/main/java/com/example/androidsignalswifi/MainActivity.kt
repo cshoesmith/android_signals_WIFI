@@ -224,10 +224,16 @@ fun MainScreen(wifiSniffer: WifiSniffer) {
                 }
             }
 
-            // Right Status Pills (Stacked)
+            // Right Status Pills (Stacked) + Info Button
             Column(
                 horizontalAlignment = Alignment.End
             ) {
+                IconButton(
+                    onClick = { showInfoDialog = true },
+                    modifier = Modifier.padding(bottom = 8.dp)
+                ) {
+                    Icon(Icons.Filled.Info, contentDescription = "Info", tint = Color.White)
+                }
                 Box {
                     InputChip(
                         selected = true,
