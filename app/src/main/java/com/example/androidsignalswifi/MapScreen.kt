@@ -18,6 +18,9 @@ import org.osmdroid.views.overlay.Marker
 import android.graphics.Color
 import android.location.Location
 
+import android.graphics.Paint
+import org.osmdroid.views.overlay.Overlay
+
 fun getBitmapDrawable(context: android.content.Context, id: Int): BitmapDrawable? {
     val drawable = ContextCompat.getDrawable(context, id) ?: return null
     val bitmap = Bitmap.createBitmap(
@@ -31,8 +34,87 @@ fun getBitmapDrawable(context: android.content.Context, id: Int): BitmapDrawable
     return BitmapDrawable(context.resources, bitmap)
 }
 
+class UserLocationOverlay(private val location: Location) : Overlay() {
+    private val point = GeoPoint(location.latitude, location.longitude)
+    private val paintInner = Paint().apply {
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+    private val paintOuter = Paint().apply {
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+    private val paintBorder = Paint().apply {
+        color = Color.WHITE
+        style = Paint.Style.STROKE
+        strokeWidth = 4f
+        isAntiAlias = true
+        strokeJoin = Paint.Join.ROUND
+    }
+    private val animationStart = System.currentTimeMillis()
+    private val starPath = android.graphics.Path()
+
+    private fun updateStarPath(centerX: Float, centerY: Float, outerRadius: Float, innerRadius: Float) {
+        starPath.reset()
+        val numPoints = 5
+        val angleIncrement = Math.PI * 2.0 / numPoints
+        val halfAngleIncrement = angleIncrement / 2.0
+        var currentAngle = -Math.PI / 2.0
+
+        for (i in 0 until numPoints) {
+            val outerX = centerX + (Math.cos(currentAngle).toFloat() * outerRadius)
+            val outerY = centerY + (Math.sin(currentAngle).toFloat() * outerRadius)
+            if (i == 0) {
+                starPath.moveTo(outerX, outerY)
+            } else {
+                starPath.lineTo(outerX, outerY)
+            }
+
+            val innerAngle = currentAngle + halfAngleIncrement
+            val innerX = centerX + (Math.cos(innerAngle).toFloat() * innerRadius)
+            val innerY = centerY + (Math.sin(innerAngle).toFloat() * innerRadius)
+            starPath.lineTo(innerX, innerY)
+
+            currentAngle += angleIncrement
+        }
+        starPath.close()
+    }
+
+    override fun draw(c: Canvas, osmv: MapView, shadow: Boolean) {
+        if (shadow) return
+        val proj = osmv.projection
+        val pt = android.graphics.Point()
+        proj.toPixels(point, pt)
+
+        val time = System.currentTimeMillis()
+        val duration = 2000L
+        val progress = ((time - animationStart) % duration) / duration.toFloat()
+
+        // Rainbow cycle over 3 seconds
+        val hue = ((time % 3000L) / 3000f) * 360f
+        paintInner.color = Color.HSVToColor(floatArrayOf(hue, 1f, 1f))
+
+        // Outer pulsing star ring
+        val maxRadius = 120f
+        val currentRadius = maxRadius * progress
+        val alpha = (255 * (1f - progress)).toInt().coerceIn(0, 255)
+        paintOuter.color = Color.HSVToColor(alpha, floatArrayOf(hue, 1f, 1f))
+
+        updateStarPath(pt.x.toFloat(), pt.y.toFloat(), currentRadius, currentRadius * 0.5f)
+        c.drawPath(starPath, paintOuter)
+
+        // Inner solid star
+        updateStarPath(pt.x.toFloat(), pt.y.toFloat(), 25f, 12f)
+        c.drawPath(starPath, paintInner)
+        c.drawPath(starPath, paintBorder)
+
+        // Request redraw to animate continuously
+        osmv.postInvalidateOnAnimation()
+    }
+}
+
 @Composable
-fun MapScreen(aps: List<ScannedAp>, centerTrigger: Int, currentLocation: Location?) {
+fun MapScreen(aps: List<ScannedAp>, centerTrigger: Int, currentLocation: Location?, zoomInTrigger: Int = 0, zoomOutTrigger: Int = 0) {
     val context = LocalContext.current
     Configuration.getInstance().load(context, context.getSharedPreferences("osmdroid", 0))
 
@@ -54,10 +136,23 @@ fun MapScreen(aps: List<ScannedAp>, centerTrigger: Int, currentLocation: Locatio
         }
     }
 
+    LaunchedEffect(zoomInTrigger) {
+        if (zoomInTrigger > 0) {
+            mapViewState?.controller?.zoomIn()
+        }
+    }
+
+    LaunchedEffect(zoomOutTrigger) {
+        if (zoomOutTrigger > 0) {
+            mapViewState?.controller?.zoomOut()
+        }
+    }
+
     AndroidView(
         factory = { ctx ->
             MapView(ctx).apply {
                 mapViewState = this
+                setBuiltInZoomControls(false)
                 setTileSource(TileSourceFactory.MAPNIK)
                 setMultiTouchControls(true)
                 controller.setZoom(18.0)
@@ -68,7 +163,9 @@ fun MapScreen(aps: List<ScannedAp>, centerTrigger: Int, currentLocation: Locatio
             mapView.overlays.clear()
 
             var centerPoint: GeoPoint? = null
-            val wifiIcon = getBitmapDrawable(context, R.drawable.ic_wifi_pin)
+            val wifiIconBlue = getBitmapDrawable(context, R.drawable.ic_cloud_wifi_blue)
+            val wifiIconLightGreen = getBitmapDrawable(context, R.drawable.ic_cloud_wifi_light_green)
+            val wifiIconDarkGreen = getBitmapDrawable(context, R.drawable.ic_cloud_wifi_dark_green)
 
             // Group APs by the first 5 octets of their MAC address (BSSID)
             // e.g. "00:11:22:33:44:55" and "00:11:22:33:44:56" become group "00:11:22:33:44"
@@ -116,13 +213,24 @@ fun MapScreen(aps: List<ScannedAp>, centerTrigger: Int, currentLocation: Locatio
                 mapView.overlays.add(circle)
 
                 if (primaryAp.totalWeight > 200.0) {
+                    val isWep = group.any { it.securityType.contains("WEP", ignoreCase = true) }
+
                     val marker = Marker(mapView).apply {
                         position = point
                         title = circle.title
                         snippet = circle.snippet
-                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                        if (wifiIcon != null) {
-                            icon = wifiIcon
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                        
+                        val selectedIcon = if (!isSecured) {
+                            wifiIconLightGreen
+                        } else if (isWep) {
+                            wifiIconDarkGreen
+                        } else {
+                            wifiIconBlue
+                        }
+
+                        if (selectedIcon != null) {
+                            icon = selectedIcon
                         }
                     }
                     mapView.overlays.add(marker)
@@ -137,6 +245,11 @@ fun MapScreen(aps: List<ScannedAp>, centerTrigger: Int, currentLocation: Locatio
                     mapView.controller.setCenter(centerPoint)
                 }
                 initialCenterSet = true
+            }
+
+            // Topmost user location beacon
+            if (currentLocation != null) {
+                mapView.overlays.add(UserLocationOverlay(currentLocation))
             }
 
             mapView.invalidate()

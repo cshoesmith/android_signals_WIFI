@@ -17,6 +17,10 @@ import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -73,6 +77,16 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.setFlags(
+            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        )
+        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        window.navigationBarColor = android.graphics.Color.TRANSPARENT
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+            window.isStatusBarContrastEnforced = false
+        }
 
         VendorLookup.init(this) // Load MAC vendors async
 
@@ -150,12 +164,14 @@ fun MainScreen(wifiSniffer: WifiSniffer) {
     var triFilter by remember { mutableStateOf(TriangulationFilter.ALL) }
     var bandFilter by remember { mutableStateOf(BandFilter.ALL) }
     var devFilter by remember { mutableStateOf(DeviceFilter.ALL) }
-    
+
     var showSecurityMenu by remember { mutableStateOf(false) }
     var showTriangulationMenu by remember { mutableStateOf(false) }
     var showBandMenu by remember { mutableStateOf(false) }
     var showDevMenu by remember { mutableStateOf(false) }
     var centerTrigger by remember { mutableIntStateOf(0) }
+    var zoomInTrigger by remember { mutableIntStateOf(0) }
+    var zoomOutTrigger by remember { mutableIntStateOf(0) }
 
     var showList by remember { mutableStateOf(false) }
     var showInfoDialog by remember { mutableStateOf(false) }
@@ -187,7 +203,31 @@ fun MainScreen(wifiSniffer: WifiSniffer) {
 
     Box(modifier = Modifier.fillMaxSize()) {
         // Map behind everything
-        MapScreen(aps = filteredAps, centerTrigger = centerTrigger, currentLocation = wifiSniffer.currentLocation)
+        MapScreen(
+            aps = filteredAps, 
+            centerTrigger = centerTrigger, 
+            currentLocation = wifiSniffer.currentLocation,
+            zoomInTrigger = zoomInTrigger,
+            zoomOutTrigger = zoomOutTrigger
+        )
+
+        // Semi-transparent dark strip behind the status bar
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.4f))
+                .windowInsetsTopHeight(WindowInsets.statusBars)
+        )
+
+        // Semi-transparent dark strip behind the navigation bar
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.4f))
+                .windowInsetsBottomHeight(WindowInsets.navigationBars)
+        )
 
         // Top Info & Badges
         Row(
@@ -360,16 +400,41 @@ fun MainScreen(wifiSniffer: WifiSniffer) {
             }
         }
         
-        // Scan Timer Clock on the right edge aligned with Last Scan banner
-        Box(
+        // Map Zoom Controls & Scan Timer Clock
+        Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .windowInsetsPadding(WindowInsets.navigationBars)
-                .padding(bottom = 80.dp, end = 16.dp)
-                .size(56.dp),
-            contentAlignment = Alignment.Center
+                .padding(bottom = 80.dp, end = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            ScanTimerClock(lastScanTime = lastScan, isScanning = isScanning)
+            // Zoom In Button
+            FloatingActionButton(
+                onClick = { zoomInTrigger++ },
+                modifier = Modifier.size(40.dp),
+                containerColor = Color.Black.copy(alpha = 0.6f),
+                contentColor = Color.White
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = "Zoom In")
+            }
+            
+            // Zoom Out Button
+            FloatingActionButton(
+                onClick = { zoomOutTrigger++ },
+                modifier = Modifier.size(40.dp),
+                containerColor = Color.Black.copy(alpha = 0.6f),
+                contentColor = Color.White
+            ) {
+                Text("-", fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 2.dp))
+            }
+
+            Box(
+                modifier = Modifier.size(56.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                ScanTimerClock(lastScanTime = lastScan, isScanning = isScanning)
+            }
         }
 
         if (showInfoDialog) {
