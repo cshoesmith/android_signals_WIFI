@@ -340,16 +340,22 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
             }
         }
 
-        // Filters side tab - anchored to right edge
-        Row(
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .offset(y = (-190).dp)
-        ) {
-            // "Filters" vertical tab label
+        // Scrim overlay to close filters when tapping outside
+        if (showFilters) {
             Box(
                 modifier = Modifier
-                    .clickable { showFilters = !showFilters }
+                    .fillMaxSize()
+                    .clickable { showFilters = false }
+            )
+        }
+
+        // Filters tab (only visible when collapsed)
+        if (!showFilters) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .offset(y = (-190).dp)
+                    .clickable { showFilters = true }
                     .background(
                         Color.Black.copy(alpha = 0.7f),
                         RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp)
@@ -358,8 +364,7 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    val label = if (showFilters) "\u25B6" else "Filters"
-                    label.forEach { ch ->
+                    "Filters".forEach { ch ->
                         Text(
                             text = ch.toString(),
                             color = Color.White,
@@ -370,83 +375,96 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                     }
                 }
             }
+        }
 
-            // Filter panel (slides in/out)
-            androidx.compose.animation.AnimatedVisibility(
-                visible = showFilters,
-                enter = androidx.compose.animation.slideInHorizontally(initialOffsetX = { it }),
-                exit = androidx.compose.animation.slideOutHorizontally(targetOffsetX = { it })
+        // Filter panel (slides in/out from right edge)
+        androidx.compose.animation.AnimatedVisibility(
+            visible = showFilters,
+            enter = androidx.compose.animation.slideInHorizontally(initialOffsetX = { it }),
+            exit = androidx.compose.animation.slideOutHorizontally(targetOffsetX = { it }),
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .offset(y = (-190).dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp))
+                    .padding(8.dp),
+                horizontalAlignment = Alignment.End
             ) {
-                Column(
+                Text(
+                    text = "\u2715",
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
                     modifier = Modifier
-                        .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp))
-                        .padding(8.dp),
-                    horizontalAlignment = Alignment.End
-                ) {
-                    Box {
-                        InputChip(
-                            selected = true,
-                            onClick = { showSecurityMenu = true },
-                            label = { Text("Security: ${secFilter.name}") },
-                            modifier = Modifier.padding(bottom = 0.dp)
-                        )
-                        DropdownMenu(
-                            expanded = showSecurityMenu,
-                            onDismissRequest = { showSecurityMenu = false }
-                        ) {
-                            DropdownMenuItem(text = { Text("All") }, onClick = { secFilter = SecurityFilter.ALL; showSecurityMenu = false })
-                            DropdownMenuItem(text = { Text("Open") }, onClick = { secFilter = SecurityFilter.OPEN; showSecurityMenu = false })
-                            DropdownMenuItem(text = { Text("Secured") }, onClick = { secFilter = SecurityFilter.SECURED; showSecurityMenu = false })
-                        }
+                        .clickable { showFilters = false }
+                        .padding(bottom = 4.dp)
+                        .align(Alignment.End)
+                )
+                Box {
+                    InputChip(
+                        selected = true,
+                        onClick = { showSecurityMenu = true },
+                        label = { Text("Security: ${secFilter.name}") },
+                        modifier = Modifier.padding(bottom = 0.dp)
+                    )
+                    DropdownMenu(
+                        expanded = showSecurityMenu,
+                        onDismissRequest = { showSecurityMenu = false }
+                    ) {
+                        DropdownMenuItem(text = { Text("All") }, onClick = { secFilter = SecurityFilter.ALL; showSecurityMenu = false })
+                        DropdownMenuItem(text = { Text("Open") }, onClick = { secFilter = SecurityFilter.OPEN; showSecurityMenu = false })
+                        DropdownMenuItem(text = { Text("Secured") }, onClick = { secFilter = SecurityFilter.SECURED; showSecurityMenu = false })
                     }
-                    Box {
-                        InputChip(
-                            selected = true,
-                            onClick = { showTriangulationMenu = true },
-                            label = { Text("Triangulation: ${triFilter.name}") },
-                            modifier = Modifier.padding(bottom = 0.dp)
-                        )
-                        DropdownMenu(
-                            expanded = showTriangulationMenu,
-                            onDismissRequest = { showTriangulationMenu = false }
-                        ) {
-                            DropdownMenuItem(text = { Text("All") }, onClick = { triFilter = TriangulationFilter.ALL; showTriangulationMenu = false })
-                            DropdownMenuItem(text = { Text("Learning (<=200)") }, onClick = { triFilter = TriangulationFilter.LEARNING; showTriangulationMenu = false })
-                            DropdownMenuItem(text = { Text("Known (>200)") }, onClick = { triFilter = TriangulationFilter.KNOWN; showTriangulationMenu = false })
-                        }
+                }
+                Box {
+                    InputChip(
+                        selected = true,
+                        onClick = { showTriangulationMenu = true },
+                        label = { Text("Triangulation: ${triFilter.name}") },
+                        modifier = Modifier.padding(bottom = 0.dp)
+                    )
+                    DropdownMenu(
+                        expanded = showTriangulationMenu,
+                        onDismissRequest = { showTriangulationMenu = false }
+                    ) {
+                        DropdownMenuItem(text = { Text("All") }, onClick = { triFilter = TriangulationFilter.ALL; showTriangulationMenu = false })
+                        DropdownMenuItem(text = { Text("Learning (<=200)") }, onClick = { triFilter = TriangulationFilter.LEARNING; showTriangulationMenu = false })
+                        DropdownMenuItem(text = { Text("Known (>200)") }, onClick = { triFilter = TriangulationFilter.KNOWN; showTriangulationMenu = false })
                     }
-                    Box {
-                        InputChip(
-                            selected = true,
-                            onClick = { showBandMenu = true },
-                            label = { Text("Band: ${bandFilter.name}") },
-                            modifier = Modifier.padding(bottom = 0.dp)
-                        )
-                        DropdownMenu(
-                            expanded = showBandMenu,
-                            onDismissRequest = { showBandMenu = false }
-                        ) {
-                            DropdownMenuItem(text = { Text("All Bands") }, onClick = { bandFilter = BandFilter.ALL; showBandMenu = false })
-                            DropdownMenuItem(text = { Text("2.4 GHz Only") }, onClick = { bandFilter = BandFilter.BAND_2_4; showBandMenu = false })
-                            DropdownMenuItem(text = { Text("5 GHz Only") }, onClick = { bandFilter = BandFilter.BAND_5_GHZ; showBandMenu = false })
-                            DropdownMenuItem(text = { Text("6 GHz Only") }, onClick = { bandFilter = BandFilter.BAND_6_GHZ; showBandMenu = false })
-                        }
+                }
+                Box {
+                    InputChip(
+                        selected = true,
+                        onClick = { showBandMenu = true },
+                        label = { Text("Band: ${bandFilter.name}") },
+                        modifier = Modifier.padding(bottom = 0.dp)
+                    )
+                    DropdownMenu(
+                        expanded = showBandMenu,
+                        onDismissRequest = { showBandMenu = false }
+                    ) {
+                        DropdownMenuItem(text = { Text("All Bands") }, onClick = { bandFilter = BandFilter.ALL; showBandMenu = false })
+                        DropdownMenuItem(text = { Text("2.4 GHz Only") }, onClick = { bandFilter = BandFilter.BAND_2_4; showBandMenu = false })
+                        DropdownMenuItem(text = { Text("5 GHz Only") }, onClick = { bandFilter = BandFilter.BAND_5_GHZ; showBandMenu = false })
+                        DropdownMenuItem(text = { Text("6 GHz Only") }, onClick = { bandFilter = BandFilter.BAND_6_GHZ; showBandMenu = false })
                     }
-                    Box {
-                        InputChip(
-                            selected = true,
-                            onClick = { showDevMenu = true },
-                            label = { Text("Type: ${devFilter.name}") }
-                        )
-                        DropdownMenu(
-                            expanded = showDevMenu,
-                            onDismissRequest = { showDevMenu = false }
-                        ) {
-                            DropdownMenuItem(text = { Text("All Devices") }, onClick = { devFilter = DeviceFilter.ALL; showDevMenu = false })
-                            DropdownMenuItem(text = { Text("Exclude Smart TVs & Printers") }, onClick = { devFilter = DeviceFilter.ROUTERS_ONLY; showDevMenu = false })
-                            DropdownMenuItem(text = { Text("Bluetooth Devices Only") }, onClick = { devFilter = DeviceFilter.BLUETOOTH_ONLY; showDevMenu = false })
-                            DropdownMenuItem(text = { Text("Cell Towers Only") }, onClick = { devFilter = DeviceFilter.CELL_TOWERS_ONLY; showDevMenu = false })
-                        }
+                }
+                Box {
+                    InputChip(
+                        selected = true,
+                        onClick = { showDevMenu = true },
+                        label = { Text("Type: ${devFilter.name}") }
+                    )
+                    DropdownMenu(
+                        expanded = showDevMenu,
+                        onDismissRequest = { showDevMenu = false }
+                    ) {
+                        DropdownMenuItem(text = { Text("All Devices") }, onClick = { devFilter = DeviceFilter.ALL; showDevMenu = false })
+                        DropdownMenuItem(text = { Text("Exclude Smart TVs & Printers") }, onClick = { devFilter = DeviceFilter.ROUTERS_ONLY; showDevMenu = false })
+                        DropdownMenuItem(text = { Text("Bluetooth Devices Only") }, onClick = { devFilter = DeviceFilter.BLUETOOTH_ONLY; showDevMenu = false })
+                        DropdownMenuItem(text = { Text("Cell Towers Only") }, onClick = { devFilter = DeviceFilter.CELL_TOWERS_ONLY; showDevMenu = false })
                     }
                 }
             }
