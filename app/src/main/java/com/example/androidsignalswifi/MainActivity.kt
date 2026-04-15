@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -172,7 +173,7 @@ fun SplashScreen() {
 enum class SecurityFilter { ALL, OPEN, SECURED }
 enum class TriangulationFilter { ALL, LEARNING, KNOWN }
 enum class BandFilter { ALL, BAND_2_4, BAND_5_GHZ, BAND_6_GHZ }
-enum class DeviceFilter { ALL, ROUTERS_ONLY }
+enum class DeviceFilter { ALL, ROUTERS_ONLY, BLUETOOTH_ONLY, CELL_TOWERS_ONLY }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -199,6 +200,7 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
 
     var showList by remember { mutableStateOf(false) }
     var showInfoDialog by remember { mutableStateOf(false) }
+    var showFilters by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     val filteredAps = aps.filter { ap ->
@@ -221,18 +223,24 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
         val passDev = when (devFilter) {
             DeviceFilter.ALL -> true
             DeviceFilter.ROUTERS_ONLY -> !ap.capabilities.contains("P2P") && !ap.capabilities.contains("WFD")
+            DeviceFilter.BLUETOOTH_ONLY -> false
+            DeviceFilter.CELL_TOWERS_ONLY -> false
         }
         passSec && passTri && passBand && passDev
     }
+
+    val filteredBles = if (devFilter == DeviceFilter.ALL || devFilter == DeviceFilter.BLUETOOTH_ONLY) bles else emptyList()
+    val filteredCells = if (devFilter == DeviceFilter.ALL || devFilter == DeviceFilter.CELL_TOWERS_ONLY) cells else emptyList()
 
     Box(modifier = Modifier.fillMaxSize()) {
         // Map behind everything
         MapScreen(
             aps = filteredAps,
-            bles = bles,
-            cells = cells,
+            bles = filteredBles,
+            cells = filteredCells,
             centerTrigger = centerTrigger,
             currentLocation = wifiSniffer.currentLocation,
+            isScanning = isScanning,
             zoomInTrigger = zoomInTrigger,
             zoomOutTrigger = zoomOutTrigger
         )
@@ -271,96 +279,174 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                     .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
                     .padding(8.dp)
             ) {
-                Text("Access Points", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                val totalSeen = aps.size
-                val totalTriangulated = filteredAps.count { it.totalWeight > 200.0 }
-                val totalOpen = filteredAps.count { !it.isSecured }
-                
-                Row(modifier = Modifier.padding(top = 4.dp)) {
-                    Text("Seen:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
-                    Text("$totalSeen", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
-                Row {
-                    Text("Triangulated:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
-                    Text("$totalTriangulated", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
-                Row {
-                    Text("Open:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
-                    Text("$totalOpen", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                when (devFilter) {
+                    DeviceFilter.BLUETOOTH_ONLY -> {
+                        Text("Bluetooth Devices", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        val totalSeen = filteredBles.size
+                        val totalIdentified = filteredBles.count { it.name != "Unknown" && it.name.isNotEmpty() }
+                        Row(modifier = Modifier.padding(top = 4.dp)) {
+                            Text("Seen:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
+                            Text("$totalSeen", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Row {
+                            Text("Identified:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
+                            Text("$totalIdentified", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    DeviceFilter.CELL_TOWERS_ONLY -> {
+                        Text("Cell Towers", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        val totalSeen = filteredCells.size
+                        val totalTriangulated = filteredCells.count { it.totalWeight > 200.0 }
+                        val uniqueOperators = filteredCells.map { it.owner }.distinct().size
+                        Row(modifier = Modifier.padding(top = 4.dp)) {
+                            Text("Seen:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
+                            Text("$totalSeen", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Row {
+                            Text("Triangulated:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
+                            Text("$totalTriangulated", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Row {
+                            Text("Operators:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
+                            Text("$uniqueOperators", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    else -> {
+                        Text("Access Points", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        val totalSeen = aps.size
+                        val totalTriangulated = filteredAps.count { it.totalWeight > 200.0 }
+                        val totalOpen = filteredAps.count { !it.isSecured }
+                        Row(modifier = Modifier.padding(top = 4.dp)) {
+                            Text("Seen:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
+                            Text("$totalSeen", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Row {
+                            Text("Triangulated:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
+                            Text("$totalTriangulated", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Row {
+                            Text("Open:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
+                            Text("$totalOpen", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
 
-            // Right Status Pills (Stacked) + Info Button
-            Column(
-                horizontalAlignment = Alignment.End
+            // Right side: Info button only
+            IconButton(
+                onClick = { showInfoDialog = true }
             ) {
-                IconButton(
-                    onClick = { showInfoDialog = true },
-                    modifier = Modifier.padding(bottom = 8.dp)
+                Icon(Icons.Filled.Info, contentDescription = "Info", tint = Color.White)
+            }
+        }
+
+        // Filters side tab - anchored to right edge
+        Row(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .offset(y = (-190).dp)
+        ) {
+            // "Filters" vertical tab label
+            Box(
+                modifier = Modifier
+                    .clickable { showFilters = !showFilters }
+                    .background(
+                        Color.Black.copy(alpha = 0.7f),
+                        RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp)
+                    )
+                    .padding(vertical = 16.dp, horizontal = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    val label = if (showFilters) "\u25B6" else "Filters"
+                    label.forEach { ch ->
+                        Text(
+                            text = ch.toString(),
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            lineHeight = 13.sp
+                        )
+                    }
+                }
+            }
+
+            // Filter panel (slides in/out)
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showFilters,
+                enter = androidx.compose.animation.slideInHorizontally(initialOffsetX = { it }),
+                exit = androidx.compose.animation.slideOutHorizontally(targetOffsetX = { it })
+            ) {
+                Column(
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp))
+                        .padding(8.dp),
+                    horizontalAlignment = Alignment.End
                 ) {
-                    Icon(Icons.Filled.Info, contentDescription = "Info", tint = Color.White)
-                }
-                Box {
-                    InputChip(
-                        selected = true,
-                        onClick = { showSecurityMenu = true },
-                        label = { Text("Security: ${secFilter.name}") },
-                        modifier = Modifier.padding(bottom = 0.dp)
-                    )
-                    DropdownMenu(
-                        expanded = showSecurityMenu,
-                        onDismissRequest = { showSecurityMenu = false }
-                    ) {
-                        DropdownMenuItem(text = { Text("All") }, onClick = { secFilter = SecurityFilter.ALL; showSecurityMenu = false })
-                        DropdownMenuItem(text = { Text("Open") }, onClick = { secFilter = SecurityFilter.OPEN; showSecurityMenu = false })
-                        DropdownMenuItem(text = { Text("Secured") }, onClick = { secFilter = SecurityFilter.SECURED; showSecurityMenu = false })
+                    Box {
+                        InputChip(
+                            selected = true,
+                            onClick = { showSecurityMenu = true },
+                            label = { Text("Security: ${secFilter.name}") },
+                            modifier = Modifier.padding(bottom = 0.dp)
+                        )
+                        DropdownMenu(
+                            expanded = showSecurityMenu,
+                            onDismissRequest = { showSecurityMenu = false }
+                        ) {
+                            DropdownMenuItem(text = { Text("All") }, onClick = { secFilter = SecurityFilter.ALL; showSecurityMenu = false })
+                            DropdownMenuItem(text = { Text("Open") }, onClick = { secFilter = SecurityFilter.OPEN; showSecurityMenu = false })
+                            DropdownMenuItem(text = { Text("Secured") }, onClick = { secFilter = SecurityFilter.SECURED; showSecurityMenu = false })
+                        }
                     }
-                }
-                Box {
-                    InputChip(
-                        selected = true,
-                        onClick = { showTriangulationMenu = true },
-                        label = { Text("Triangulation: ${triFilter.name}") },
-                        modifier = Modifier.padding(bottom = 0.dp)
-                    )
-                    DropdownMenu(
-                        expanded = showTriangulationMenu,
-                        onDismissRequest = { showTriangulationMenu = false }
-                    ) {
-                        DropdownMenuItem(text = { Text("All") }, onClick = { triFilter = TriangulationFilter.ALL; showTriangulationMenu = false })
-                        DropdownMenuItem(text = { Text("Learning (<=200)") }, onClick = { triFilter = TriangulationFilter.LEARNING; showTriangulationMenu = false })
-                        DropdownMenuItem(text = { Text("Known (>200)") }, onClick = { triFilter = TriangulationFilter.KNOWN; showTriangulationMenu = false })
+                    Box {
+                        InputChip(
+                            selected = true,
+                            onClick = { showTriangulationMenu = true },
+                            label = { Text("Triangulation: ${triFilter.name}") },
+                            modifier = Modifier.padding(bottom = 0.dp)
+                        )
+                        DropdownMenu(
+                            expanded = showTriangulationMenu,
+                            onDismissRequest = { showTriangulationMenu = false }
+                        ) {
+                            DropdownMenuItem(text = { Text("All") }, onClick = { triFilter = TriangulationFilter.ALL; showTriangulationMenu = false })
+                            DropdownMenuItem(text = { Text("Learning (<=200)") }, onClick = { triFilter = TriangulationFilter.LEARNING; showTriangulationMenu = false })
+                            DropdownMenuItem(text = { Text("Known (>200)") }, onClick = { triFilter = TriangulationFilter.KNOWN; showTriangulationMenu = false })
+                        }
                     }
-                }
-                Box {
-                    InputChip(
-                        selected = true,
-                        onClick = { showBandMenu = true },
-                        label = { Text("Band: ${bandFilter.name}") },
-                        modifier = Modifier.padding(bottom = 0.dp)
-                    )
-                    DropdownMenu(
-                        expanded = showBandMenu,
-                        onDismissRequest = { showBandMenu = false }
-                    ) {
-                        DropdownMenuItem(text = { Text("All Bands") }, onClick = { bandFilter = BandFilter.ALL; showBandMenu = false })
-                        DropdownMenuItem(text = { Text("2.4 GHz Only") }, onClick = { bandFilter = BandFilter.BAND_2_4; showBandMenu = false })
-                        DropdownMenuItem(text = { Text("5 GHz Only") }, onClick = { bandFilter = BandFilter.BAND_5_GHZ; showBandMenu = false })
-                        DropdownMenuItem(text = { Text("6 GHz Only") }, onClick = { bandFilter = BandFilter.BAND_6_GHZ; showBandMenu = false })
+                    Box {
+                        InputChip(
+                            selected = true,
+                            onClick = { showBandMenu = true },
+                            label = { Text("Band: ${bandFilter.name}") },
+                            modifier = Modifier.padding(bottom = 0.dp)
+                        )
+                        DropdownMenu(
+                            expanded = showBandMenu,
+                            onDismissRequest = { showBandMenu = false }
+                        ) {
+                            DropdownMenuItem(text = { Text("All Bands") }, onClick = { bandFilter = BandFilter.ALL; showBandMenu = false })
+                            DropdownMenuItem(text = { Text("2.4 GHz Only") }, onClick = { bandFilter = BandFilter.BAND_2_4; showBandMenu = false })
+                            DropdownMenuItem(text = { Text("5 GHz Only") }, onClick = { bandFilter = BandFilter.BAND_5_GHZ; showBandMenu = false })
+                            DropdownMenuItem(text = { Text("6 GHz Only") }, onClick = { bandFilter = BandFilter.BAND_6_GHZ; showBandMenu = false })
+                        }
                     }
-                }
-                Box {
-                    InputChip(
-                        selected = true,
-                        onClick = { showDevMenu = true },
-                        label = { Text("Type: ${devFilter.name}") }
-                    )
-                    DropdownMenu(
-                        expanded = showDevMenu,
-                        onDismissRequest = { showDevMenu = false }
-                    ) {
-                        DropdownMenuItem(text = { Text("All Devices") }, onClick = { devFilter = DeviceFilter.ALL; showDevMenu = false })
-                        DropdownMenuItem(text = { Text("Exclude Smart TVs & Printers") }, onClick = { devFilter = DeviceFilter.ROUTERS_ONLY; showDevMenu = false })
+                    Box {
+                        InputChip(
+                            selected = true,
+                            onClick = { showDevMenu = true },
+                            label = { Text("Type: ${devFilter.name}") }
+                        )
+                        DropdownMenu(
+                            expanded = showDevMenu,
+                            onDismissRequest = { showDevMenu = false }
+                        ) {
+                            DropdownMenuItem(text = { Text("All Devices") }, onClick = { devFilter = DeviceFilter.ALL; showDevMenu = false })
+                            DropdownMenuItem(text = { Text("Exclude Smart TVs & Printers") }, onClick = { devFilter = DeviceFilter.ROUTERS_ONLY; showDevMenu = false })
+                            DropdownMenuItem(text = { Text("Bluetooth Devices Only") }, onClick = { devFilter = DeviceFilter.BLUETOOTH_ONLY; showDevMenu = false })
+                            DropdownMenuItem(text = { Text("Cell Towers Only") }, onClick = { devFilter = DeviceFilter.CELL_TOWERS_ONLY; showDevMenu = false })
+                        }
                     }
                 }
             }
@@ -422,7 +508,7 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
 
             // List Button
             FloatingActionButton(onClick = { showList = true }) {
-                Icon(Icons.Filled.List, contentDescription = "List APs")
+                Icon(Icons.Filled.List, contentDescription = "List Devices")
             }
         }
         
@@ -506,7 +592,7 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Discovered APs (${filteredAps.size})", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            Text("Discovered Devices (${filteredAps.size + filteredBles.size + filteredCells.size})", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                             TextButton(onClick = { showList = false }) { Text("Close") }
                         }
                         LazyColumn(
@@ -524,6 +610,26 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                                     val secText = if (ap.securityType.isNotEmpty()) ap.securityType else if (ap.isSecured) "Secured" else "Open"
                                     Text("Security: $secText")
                                     Text("Caps: ${ap.capabilities}", fontSize = 12.sp, color = Color.LightGray)
+                                    
+                                    HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
+                                }
+                            }
+                            items(filteredBles.sortedByDescending { it.rssi }) { ble ->
+                                Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                                    Text("BLE Name: ${if(ble.name.isNotEmpty()) ble.name else "[Unknown]"}", fontWeight = FontWeight.Bold)
+                                    Text("MAC: ${ble.mac}  ->  Vendor: ${VendorLookup.getVendor(ble.mac)}")
+                                    Text("RSSI: ${ble.rssi} dBm")
+                                    Text("Type: ${ble.deviceType}")
+                                    
+                                    HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
+                                }
+                            }
+                            items(filteredCells.sortedByDescending { it.rssi }) { cell ->
+                                Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                                    Text("Cell Identity: ${cell.cellId}", fontWeight = FontWeight.Bold)
+                                    Text("Operator: ${cell.owner}")
+                                    Text("RSSI: ${cell.rssi} dBm")
+                                    Text("Network: ${cell.networkType}")
                                     
                                     HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
                                 }
