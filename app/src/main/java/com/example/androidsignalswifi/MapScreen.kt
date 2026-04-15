@@ -114,7 +114,15 @@ class UserLocationOverlay(private val location: Location) : Overlay() {
 }
 
 @Composable
-fun MapScreen(aps: List<ScannedAp>, centerTrigger: Int, currentLocation: Location?, zoomInTrigger: Int = 0, zoomOutTrigger: Int = 0) {
+fun MapScreen(
+    aps: List<ScannedAp>,
+    bles: List<ScannedBle> = emptyList(),
+    cells: List<ScannedCell> = emptyList(),
+    centerTrigger: Int,
+    currentLocation: Location?,
+    zoomInTrigger: Int = 0,
+    zoomOutTrigger: Int = 0
+) {
     val context = LocalContext.current
     Configuration.getInstance().load(context, context.getSharedPreferences("osmdroid", 0))
 
@@ -166,7 +174,8 @@ fun MapScreen(aps: List<ScannedAp>, centerTrigger: Int, currentLocation: Locatio
             val wifiIconBlue = getBitmapDrawable(context, R.drawable.ic_cloud_wifi_blue)
             val wifiIconLightGreen = getBitmapDrawable(context, R.drawable.ic_cloud_wifi_light_green)
             val wifiIconDarkGreen = getBitmapDrawable(context, R.drawable.ic_cloud_wifi_dark_green)
-
+            val bleIcon = getBitmapDrawable(context, R.drawable.ic_ble_device)
+            val cellIcon = getBitmapDrawable(context, R.drawable.ic_cell_tower)
             // Group APs by the first 5 octets of their MAC address (BSSID)
             // e.g. "00:11:22:33:44:55" and "00:11:22:33:44:56" become group "00:11:22:33:44"
             // Then sort them by highest confidence so the smaller/more accurate spots draw on top
@@ -235,6 +244,66 @@ fun MapScreen(aps: List<ScannedAp>, centerTrigger: Int, currentLocation: Locatio
                     }
                     mapView.overlays.add(marker)
                 }
+            }
+
+            for (ble in bles) {
+                val point = GeoPoint(ble.estLat, ble.estLon)
+                if (centerPoint == null) centerPoint = point
+                
+                val radiusMeters = kotlin.math.max(5.0, 500.0 / kotlin.math.max(10.0, ble.totalWeight))
+                
+                val circle = Polygon(mapView).apply {
+                    points = Polygon.pointsAsCircle(point, radiusMeters)
+                    fillPaint.color = Color.argb(100, 128, 0, 128) // Purple for BLE
+                    outlinePaint.color = Color.argb(255, 128, 0, 128)
+                    outlinePaint.strokeWidth = 3.0f
+                    title = "BLE: ${ble.name.takeIf { it != "Unknown" } ?: ble.deviceType}"
+                    snippet = "MAC: ${ble.mac}\nLocation Wt: ${ble.totalWeight.toInt()}"
+                }
+                mapView.overlays.add(circle)
+
+                if (ble.totalWeight > 20.0) {
+                    val marker = Marker(mapView).apply {
+                        position = point
+                        title = circle.title
+                        snippet = circle.snippet
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                        if (bleIcon != null) {
+                            icon = bleIcon
+                        }
+                    }
+                    mapView.overlays.add(marker)
+                }
+            }
+
+            for (cell in cells) {
+                val point = GeoPoint(cell.estLat, cell.estLon)
+                if (centerPoint == null) centerPoint = point
+                
+                val radiusMeters = kotlin.math.max(50.0, 5000.0 / kotlin.math.max(10.0, cell.totalWeight))
+                
+                val circle = Polygon(mapView).apply {
+                    points = Polygon.pointsAsCircle(point, radiusMeters)
+                    fillPaint.color = Color.argb(60, 255, 69, 0) // Red-orange for Cellular
+                    outlinePaint.color = Color.argb(200, 255, 69, 0)
+                    outlinePaint.strokeWidth = 3.0f
+                    title = "${cell.owner} ${cell.networkType} Cell: ${cell.cellId}"
+                    snippet = "MCC/MNC: ${cell.mccMnc}\nLAC/TAC: ${cell.lac}\nPCI: ${cell.pci}\nBand: ${cell.band}\nLocation Wt: ${cell.totalWeight.toInt()}"
+                }
+                mapView.overlays.add(circle)
+
+                // Always draw cell tower markers, they are rare and spread out
+                val marker = Marker(mapView).apply {
+                    position = point
+                    title = circle.title
+                    snippet = circle.snippet
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM) // Anchor bottom for tower
+                    if (cellIcon != null) {
+                        icon = cellIcon
+                    }
+                }
+
+                mapView.overlays.add(marker)
             }
 
             // Only set center on the VERY FIRST load

@@ -65,12 +65,20 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
 
     private lateinit var wifiSniffer: WifiSniffer
+    private lateinit var bleSniffer: BleSniffer
+    private lateinit var cellSniffer: CellSniffer
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         if (permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true) {
             wifiSniffer.startScanning()
+        }
+        if (permissions[Manifest.permission.BLUETOOTH_SCAN] == true && permissions[Manifest.permission.BLUETOOTH_CONNECT] == true) {
+            bleSniffer.startScanning()
+        }
+        if (permissions[Manifest.permission.READ_PHONE_STATE] == true) {
+            cellSniffer.startScanning()
         }
     }
 
@@ -91,6 +99,8 @@ class MainActivity : ComponentActivity() {
         VendorLookup.init(this) // Load MAC vendors async
 
         wifiSniffer = WifiSniffer(this)
+        bleSniffer = BleSniffer(this)
+        cellSniffer = CellSniffer(this)
 
         checkPermissionsAndStart()
 
@@ -106,23 +116,34 @@ class MainActivity : ComponentActivity() {
                 if (showSplash) {
                     SplashScreen()
                 } else {
-                    MainScreen(wifiSniffer)
+                    MainScreen(wifiSniffer, bleSniffer, cellSniffer)
                 }
             }
         }
     }
 
     private fun checkPermissionsAndStart() {
-        val fineLocationPermission = ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.ACCESS_FINE_LOCATION
+        val permissionsToRequest = mutableListOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            Manifest.permission.READ_PHONE_STATE
         )
-        if (fineLocationPermission == PackageManager.PERMISSION_GRANTED) {
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            permissionsToRequest.add(Manifest.permission.BLUETOOTH_SCAN)
+            permissionsToRequest.add(Manifest.permission.BLUETOOTH_CONNECT)
+        }
+
+        val allGranted = permissionsToRequest.all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
+
+        if (allGranted) {
             wifiSniffer.startScanning()
+            bleSniffer.startScanning()
+            cellSniffer.startScanning()
         } else {
-            requestPermissionLauncher.launch(
-                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
-            )
+            requestPermissionLauncher.launch(permissionsToRequest.toTypedArray())
         }
     }
 }
@@ -155,8 +176,11 @@ enum class DeviceFilter { ALL, ROUTERS_ONLY }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(wifiSniffer: WifiSniffer) {
+fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: CellSniffer) {
     val aps by wifiSniffer.scannedAps.collectAsState()
+    val bles by bleSniffer.scannedBle.collectAsState()
+    val cells by cellSniffer.scannedCells.collectAsState()
+    
     val isScanning by wifiSniffer.isScanning.collectAsState()
     val lastScan by wifiSniffer.lastScanTime.collectAsState()
     
@@ -204,8 +228,10 @@ fun MainScreen(wifiSniffer: WifiSniffer) {
     Box(modifier = Modifier.fillMaxSize()) {
         // Map behind everything
         MapScreen(
-            aps = filteredAps, 
-            centerTrigger = centerTrigger, 
+            aps = filteredAps,
+            bles = bles,
+            cells = cells,
+            centerTrigger = centerTrigger,
             currentLocation = wifiSniffer.currentLocation,
             zoomInTrigger = zoomInTrigger,
             zoomOutTrigger = zoomOutTrigger
