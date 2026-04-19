@@ -48,6 +48,37 @@ class CellSniffer(private val context: Context) {
 
     private val currentScans = mutableMapOf<String, ScannedCell>()
 
+    init {
+        loadPersisted()
+    }
+
+    private fun loadPersisted() {
+        CoroutineScope(Dispatchers.IO).launch {
+            val db = dbHelper.readableDatabase
+            val cursor = db.query(DatabaseHelper.TABLE_CELLS, null, null, null, null, null, DatabaseHelper.COL_TOTAL_WEIGHT + " DESC")
+            val loadedList = mutableListOf<ScannedCell>()
+            while (cursor.moveToNext()) {
+                val cellId = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_CELL_ID)) ?: continue
+                val networkType = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_CELL_NETWORK)) ?: ""
+                val mccMnc = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_CELL_MCC_MNC)) ?: ""
+                val estLat = cursor.getDouble(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_EST_LAT))
+                val estLon = cursor.getDouble(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_EST_LON))
+                val totalWeight = kotlin.math.max(1.0, cursor.getDouble(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_TOTAL_WEIGHT)))
+                val rssi = cursor.getInt(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_LAST_RSSI))
+                val lac = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_CELL_LAC)) ?: ""
+                val owner = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_CELL_OWNER)) ?: ""
+                val pci = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_CELL_PCI)) ?: ""
+                val band = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_CELL_BAND)) ?: ""
+                
+                val sc = ScannedCell(cellId, networkType, mccMnc, rssi, estLat, estLon, totalWeight, lac, owner, pci, band)
+                loadedList.add(sc)
+                currentScans[cellId] = sc
+            }
+            cursor.close()
+            _scannedCells.value = loadedList.sortedByDescending { it.totalWeight }
+        }
+    }
+
     private val locationCallback = object : LocationCallback() {
         override fun onLocationResult(locationResult: LocationResult) {
             super.onLocationResult(locationResult)
@@ -140,7 +171,7 @@ class CellSniffer(private val context: Context) {
 
                 if (cellId.isEmpty() || cellId == "2147483647") return@forEach // Invalid
 
-                val weight = Math.pow(10.0, rssi / 20.0)
+                val weight = Math.max(1.0, 130.0 + rssi)
 
                 val cursor = db.query(
                     DatabaseHelper.TABLE_CELLS,

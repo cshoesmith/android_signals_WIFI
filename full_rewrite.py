@@ -1,4 +1,5 @@
-package com.example.androidsignalswifi
+import os
+content = """package com.example.androidsignalswifi
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -14,14 +15,11 @@ import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Polygon
-import org.osmdroid.views.overlay.infowindow.InfoWindow
 import org.osmdroid.views.overlay.Marker
 import android.graphics.Color
 import android.location.Location
 
 import android.graphics.Paint
-import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
 import org.osmdroid.views.overlay.Overlay
 
 fun getBitmap(context: android.content.Context, id: Int): Bitmap? {
@@ -116,23 +114,6 @@ class UserLocationOverlay(private val location: Location) : Overlay() {
     }
 }
 
-fun lightenBitmap(src: Bitmap, factor: Float = 0.35f): Bitmap {
-    val result = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(result)
-    val paint = Paint()
-    val cm = ColorMatrix()
-    // Shift RGB channels toward white by factor
-    cm.set(floatArrayOf(
-        1f - factor, 0f, 0f, 0f, 255f * factor,
-        0f, 1f - factor, 0f, 0f, 255f * factor,
-        0f, 0f, 1f - factor, 0f, 255f * factor,
-        0f, 0f, 0f, 1f, 0f
-    ))
-    paint.colorFilter = ColorMatrixColorFilter(cm)
-    canvas.drawBitmap(src, 0f, 0f, paint)
-    return result
-}
-
 @Composable
 fun MapScreen(
     aps: List<ScannedAp>,
@@ -142,8 +123,7 @@ fun MapScreen(
     currentLocation: Location?,
     isScanning: Boolean = false,
     zoomInTrigger: Int = 0,
-    zoomOutTrigger: Int = 0,
-    onBleGroupClick: (groupKey: String, devices: List<ScannedBle>) -> Unit = { _, _ -> }
+    zoomOutTrigger: Int = 0
 ) {
     val context = LocalContext.current
     Configuration.getInstance().load(context, context.getSharedPreferences("osmdroid", 0))
@@ -152,23 +132,6 @@ fun MapScreen(
     var initialCenterSet by remember { mutableStateOf(false) }
     var openTooltipId by remember { mutableStateOf<String?>(null) }
     val lastManualMoveTime = remember { longArrayOf(0L) }
-
-    // Cache bitmaps so they're only decoded once
-    val wifiBlueBmp = remember { getBitmap(context, R.drawable.ic_cloud_wifi_blue) }
-    val wifiLightGreenBmp = remember { getBitmap(context, R.drawable.ic_cloud_wifi_light_green) }
-    val wifiDarkGreenBmp = remember { getBitmap(context, R.drawable.ic_cloud_wifi_dark_green) }
-    val bleBmp = remember {
-        val raw = getBitmap(context, R.drawable.ic_ble_device)
-        if (raw != null) Bitmap.createScaledBitmap(raw, (raw.width * 1.25f).toInt(), (raw.height * 1.25f).toInt(), true) else null
-    }
-    // Grouped BLE icon: 10% larger than individual + lighter shade
-    val bleGroupBmp = remember {
-        if (bleBmp != null) {
-            val scaled = Bitmap.createScaledBitmap(bleBmp, (bleBmp.width * 1.1f).toInt(), (bleBmp.height * 1.1f).toInt(), true)
-            lightenBitmap(scaled)
-        } else null
-    }
-    val cellBmp = remember { getBitmap(context, R.drawable.ic_cell_tower) }
 
     LaunchedEffect(centerTrigger) {
         if (centerTrigger > 0) {
@@ -206,39 +169,27 @@ fun MapScreen(
                 setTileSource(TileSourceFactory.MAPNIK)
                 setMultiTouchControls(true)
                 controller.setZoom(18.0)
-                // Track manual moves via an overlay so we don't block marker tap events
-                overlays.add(object : Overlay() {
-                    override fun onScroll(pEvent1: android.view.MotionEvent?, pEvent2: android.view.MotionEvent?, pDistanceX: Float, pDistanceY: Float, pMapView: MapView?): Boolean {
-                        lastManualMoveTime[0] = System.currentTimeMillis()
-                        return false
-                    }
-                    override fun onFling(pEvent1: android.view.MotionEvent?, pEvent2: android.view.MotionEvent?, pVelocityX: Float, pVelocityY: Float, pMapView: MapView?): Boolean {
-                        lastManualMoveTime[0] = System.currentTimeMillis()
-                        return false
-                    }
-                })
+                setOnTouchListener { _, _ ->
+                    lastManualMoveTime[0] = System.currentTimeMillis()
+                    false
+                }
             }
         },
         modifier = Modifier.fillMaxSize(),
         update = { mapView ->
-            val manualMoveActive = System.currentTimeMillis() - lastManualMoveTime[0] < 10000L
+            if (System.currentTimeMillis() - lastManualMoveTime[0] < 10000L) {
+                return@AndroidView
+            }
 
-            org.osmdroid.views.overlay.infowindow.InfoWindow.closeAllInfoWindowsOn(mapView)
+            org.osmdroid.views.overlay.InfoWindow.closeAllInfoWindowsOn(mapView)
             mapView.overlays.clear()
 
-            // Re-add the scroll/fling tracking overlay (cleared above)
-            mapView.overlays.add(object : Overlay() {
-                override fun onScroll(pEvent1: android.view.MotionEvent?, pEvent2: android.view.MotionEvent?, pDistanceX: Float, pDistanceY: Float, pMapView: MapView?): Boolean {
-                    lastManualMoveTime[0] = System.currentTimeMillis()
-                    return false
-                }
-                override fun onFling(pEvent1: android.view.MotionEvent?, pEvent2: android.view.MotionEvent?, pVelocityX: Float, pVelocityY: Float, pMapView: MapView?): Boolean {
-                    lastManualMoveTime[0] = System.currentTimeMillis()
-                    return false
-                }
-            })
-
             var centerPoint: GeoPoint? = null
+            val wifiBlueBmp = getBitmap(context, R.drawable.ic_cloud_wifi_blue)
+            val wifiLightGreenBmp = getBitmap(context, R.drawable.ic_cloud_wifi_light_green)
+            val wifiDarkGreenBmp = getBitmap(context, R.drawable.ic_cloud_wifi_dark_green)
+            val bleBmp = getBitmap(context, R.drawable.ic_ble_device)
+            val cellBmp = getBitmap(context, R.drawable.ic_cell_tower)
             
             val groupedAps = aps.groupBy { it.bssid.substringBeforeLast(":") }
                 .entries
@@ -255,12 +206,12 @@ fun MapScreen(
                 val g = (hash and 0x00FF00) shr 8
                 val b = (hash and 0x0000FF)
 
-                val radiusMeters = kotlin.math.max(5.0, 1000.0 / kotlin.math.max(10.0, primaryAp.totalWeight))
+                val radiusMeters = kotlin.math.max(10.0, 2000.0 / kotlin.math.max(10.0, primaryAp.totalWeight))
 
                 val ssids = group.map { if(it.ssid.isNotEmpty()) it.ssid else "[Hidden]" }.distinct().joinToString(", ")
                 val isSecured = group.any { it.isSecured }
                 val titleText = "Vendor: ${VendorLookup.getVendor(primaryAp.bssid)} (Location Wt: ${group.sumOf { it.totalWeight }.toInt()})"
-                val snippetText = group.joinToString("\n") {
+                val snippetText = group.joinToString("\\n") {
                     val secText = if (it.securityType.isNotEmpty()) it.securityType else if (it.isSecured) "Secured" else "Open"
                     val ssidName = it.ssid.takeIf { s -> s.isNotEmpty() } ?: "Hidden"
                     val freqText = "${it.frequency} MHz"
@@ -316,6 +267,31 @@ fun MapScreen(
                 }
             }
 
+            for (ble in bles) {
+                val point = GeoPoint(ble.estLat, ble.estLon)
+                if (centerPoint == null) centerPoint = point
+
+                val identifier = ble.mac
+                val fixedName = if(ble.name != "Unknown") ble.name else ble.deviceType
+
+                val marker = Marker(mapView).apply {
+                    id = identifier
+                    position = point
+                    title = "BLE: $fixedName"
+                    snippet = "MAC: ${ble.mac}\\nLocation Wt: ${ble.totalWeight.toInt()}"
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                    setOnMarkerClickListener { m, mv ->
+                        openTooltipId = if (openTooltipId == identifier) null else identifier
+                        true
+                    }
+                    if (bleBmp != null) {
+                        icon = BitmapDrawable(context.resources, bleBmp)
+                    }
+                }
+                mapView.overlays.add(marker)
+                if (openTooltipId == identifier) marker.showInfoWindow()
+            }
+
             for (cell in cells) {
                 val point = GeoPoint(cell.estLat, cell.estLon)
                 if (centerPoint == null) centerPoint = point
@@ -330,7 +306,7 @@ fun MapScreen(
                     outlinePaint.color = Color.argb(200, 255, 69, 0)
                     outlinePaint.strokeWidth = 3.0f
                     title = "${cell.owner} ${cell.networkType} Cell: ${cell.cellId}"
-                    snippet = "MCC/MNC: ${cell.mccMnc}\nLAC/TAC: ${cell.lac}\nPCI: ${cell.pci}\nBand: ${cell.band}\nLocation Wt: ${cell.totalWeight.toInt()}"   
+                    snippet = "MCC/MNC: ${cell.mccMnc}\\nLAC/TAC: ${cell.lac}\\nPCI: ${cell.pci}\\nBand: ${cell.band}\\nLocation Wt: ${cell.totalWeight.toInt()}"   
                     setOnClickListener { polygon, mv, pos ->
                         openTooltipId = if (openTooltipId == identifier) null else identifier
                         true
@@ -357,65 +333,16 @@ fun MapScreen(
                 if (openTooltipId == identifier) marker.showInfoWindow()
             }
 
-            // BLE markers added AFTER cells so they render on top and are tappable
-            // Group BLE devices by vendor (if known) or device name
-            val bleGroups = bles.groupBy { ble ->
-                val vendor = VendorLookup.getVendor(ble.mac)
-                if (vendor != "Unknown") vendor
-                else if (ble.name != "Unknown" && ble.name.isNotEmpty()) ble.name
-                else ble.deviceType
-            }
-
-            for ((groupKey, group) in bleGroups) {
-                // Use the device with highest weight as the representative location
-                val primary = group.maxByOrNull { it.totalWeight } ?: group[0]
-                val point = GeoPoint(primary.estLat, primary.estLon)
-                if (centerPoint == null) centerPoint = point
-
-                val isGroup = group.size > 1
-                val identifier = if (isGroup) "ble_group_$groupKey" else primary.mac
-                val fixedName = if (primary.name != "Unknown") primary.name else primary.deviceType
-
-                val marker = Marker(mapView).apply {
-                    id = identifier
-                    position = point
-                    if (isGroup) {
-                        title = "BLE Group: $groupKey (${group.size} devices)"
-                        snippet = "Devices: ${group.size}\nType: ${primary.deviceType}\nBest RSSI: ${group.maxOf { it.rssi }} dBm"
-                    } else {
-                        title = "BLE: $fixedName"
-                        snippet = "MAC: ${primary.mac}\nVendor: ${VendorLookup.getVendor(primary.mac)}\nType: ${primary.deviceType}\nRSSI: ${primary.rssi} dBm\nLocation Wt: ${primary.totalWeight.toInt()}"
-                    }
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                    setOnMarkerClickListener { m, mv ->
-                        if (isGroup) {
-                            onBleGroupClick(groupKey, group)
-                        } else {
-                            openTooltipId = if (openTooltipId == identifier) null else identifier
-                        }
-                        true
-                    }
-                    val bmp = if (isGroup) bleGroupBmp else bleBmp
-                    if (bmp != null) {
-                        icon = BitmapDrawable(context.resources, bmp)
-                    }
-                }
-                mapView.overlays.add(marker)
-                if (!isGroup && openTooltipId == identifier) marker.showInfoWindow()
-            }
-
-            if (!manualMoveActive) {
-                if (isScanning && currentLocation != null) {
+            if (isScanning && currentLocation != null) {
+                mapView.controller.setCenter(GeoPoint(currentLocation.latitude, currentLocation.longitude))
+                initialCenterSet = true
+            } else if (!initialCenterSet && centerPoint != null) {
+                if (currentLocation != null) {
                     mapView.controller.setCenter(GeoPoint(currentLocation.latitude, currentLocation.longitude))
-                    initialCenterSet = true
-                } else if (!initialCenterSet && centerPoint != null) {
-                    if (currentLocation != null) {
-                        mapView.controller.setCenter(GeoPoint(currentLocation.latitude, currentLocation.longitude))
-                    } else {
-                        mapView.controller.setCenter(centerPoint)
-                    }
-                    initialCenterSet = true
+                } else {
+                    mapView.controller.setCenter(centerPoint)
                 }
+                initialCenterSet = true
             }
 
             if (currentLocation != null) {
@@ -425,4 +352,7 @@ fun MapScreen(
             mapView.invalidate()
         }
     )
-}
+}"""
+
+with open("app/src/main/java/com/example/androidsignalswifi/MapScreen.kt", "w", encoding="utf-8") as f:
+    f.write(content)

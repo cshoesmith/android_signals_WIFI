@@ -201,6 +201,8 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
     var showList by remember { mutableStateOf(false) }
     var showInfoDialog by remember { mutableStateOf(false) }
     var showFilters by remember { mutableStateOf(false) }
+    var bleGroupDialogKey by remember { mutableStateOf<String?>(null) }
+    var bleGroupDialogDevices by remember { mutableStateOf<List<ScannedBle>>(emptyList()) }
     val scope = rememberCoroutineScope()
 
     val filteredAps = aps.filter { ap ->
@@ -242,7 +244,11 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
             currentLocation = wifiSniffer.currentLocation,
             isScanning = isScanning,
             zoomInTrigger = zoomInTrigger,
-            zoomOutTrigger = zoomOutTrigger
+            zoomOutTrigger = zoomOutTrigger,
+            onBleGroupClick = { key, devices ->
+                bleGroupDialogKey = key
+                bleGroupDialogDevices = devices
+            }
         )
 
         // Semi-transparent dark strip behind the status bar
@@ -585,6 +591,42 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
             },
             confirmButton = {
                 TextButton(onClick = { showInfoDialog = false }) { Text("Close") }
+            }
+        )
+    }
+
+    // BLE Group detail modal
+    if (bleGroupDialogKey != null) {
+        AlertDialog(
+            onDismissRequest = {
+                bleGroupDialogKey = null
+                bleGroupDialogDevices = emptyList()
+            },
+            title = { Text("BLE Group: ${bleGroupDialogKey}", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text("${bleGroupDialogDevices.size} devices", fontSize = 14.sp, color = Color.Gray)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 400.dp)
+                    ) {
+                        items(bleGroupDialogDevices.sortedByDescending { it.rssi }) { ble ->
+                            Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                                Text(ble.mac, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                val displayName = if (ble.name != "Unknown" && ble.name.isNotEmpty()) ble.name else ble.deviceType
+                                Text("Name: $displayName", fontSize = 13.sp)
+                                Text("RSSI: ${ble.rssi} dBm | Type: ${ble.deviceType}", fontSize = 12.sp, color = Color.Gray)
+                                HorizontalDivider(modifier = Modifier.padding(top = 6.dp))
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    bleGroupDialogKey = null
+                    bleGroupDialogDevices = emptyList()
+                }) { Text("Close") }
             }
         )
     }

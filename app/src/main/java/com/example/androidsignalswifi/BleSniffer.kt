@@ -27,7 +27,8 @@ data class ScannedBle(
     val estLat: Double,
     val estLon: Double,
     val totalWeight: Double,
-    val deviceType: String
+    val deviceType: String,
+    val lastSeen: Long = System.currentTimeMillis()
 )
 
 @SuppressLint("MissingPermission")
@@ -68,7 +69,13 @@ class BleSniffer(private val context: Context) {
 
     private fun loadPersisted() {
         CoroutineScope(Dispatchers.IO).launch {
-            val db = dbHelper.readableDatabase
+            // Purge BLE devices older than 24 hours from the database
+            val twentyFourHoursAgo = System.currentTimeMillis() - (1000L * 60 * 60 * 24)
+            val db = dbHelper.writableDatabase
+            try {
+                db.delete(DatabaseHelper.TABLE_BLE, "${DatabaseHelper.COL_LAST_SEEN} < ?", arrayOf(twentyFourHoursAgo.toString()))
+            } catch (e: Exception) {}
+
             val cursor = db.query(DatabaseHelper.TABLE_BLE, null, null, null, null, null, null)
             val macIdx = cursor.getColumnIndexOrThrow(DatabaseHelper.COL_BLE_MAC)
             val nameIdx = cursor.getColumnIndexOrThrow(DatabaseHelper.COL_BLE_NAME)
@@ -77,6 +84,7 @@ class BleSniffer(private val context: Context) {
             val lonIdx = cursor.getColumnIndexOrThrow(DatabaseHelper.COL_EST_LON)
             val weightIdx = cursor.getColumnIndexOrThrow(DatabaseHelper.COL_TOTAL_WEIGHT)
             val typeIdx = cursor.getColumnIndexOrThrow(DatabaseHelper.COL_BLE_TYPE)
+            val seenIdx = cursor.getColumnIndexOrThrow(DatabaseHelper.COL_LAST_SEEN)
 
             while (cursor.moveToNext()) {
                 val mac = cursor.getString(macIdx)
@@ -87,7 +95,8 @@ class BleSniffer(private val context: Context) {
                     estLat = cursor.getDouble(latIdx),
                     estLon = cursor.getDouble(lonIdx),
                     totalWeight = cursor.getDouble(weightIdx),
-                    deviceType = cursor.getString(typeIdx)
+                    deviceType = cursor.getString(typeIdx),
+                    lastSeen = cursor.getLong(seenIdx)
                 )
                 currentScans[mac] = ble
             }
@@ -265,7 +274,7 @@ class BleSniffer(private val context: Context) {
                 db.insert(DatabaseHelper.TABLE_OBS, null, obsValues)
                 db.setTransactionSuccessful()
 
-                val scanned = ScannedBle(mac, name, rssi, newEstLat, newEstLon, newTotalWeight, deviceType)
+                val scanned = ScannedBle(mac, name, rssi, newEstLat, newEstLon, newTotalWeight, deviceType, System.currentTimeMillis())
                 currentScans[mac] = scanned
                 scheduleStateUpdate()
 

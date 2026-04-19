@@ -1,4 +1,4 @@
-package com.example.androidsignalswifi
+database_code = """package com.example.androidsignalswifi
 
 import android.content.ContentValues
 import android.content.Context
@@ -10,7 +10,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
 
     companion object {
         const val DATABASE_NAME = "wifi_sniffer.db"
-        const val DATABASE_VERSION = 9
+        const val DATABASE_VERSION = 8
 
         const val TABLE_APS = "access_points"
         const val COL_BSSID = "bssid"
@@ -119,7 +119,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
                 db.execSQL("ALTER TABLE ${TABLE_APS} ADD COLUMN ${COL_CAPABILITIES} TEXT DEFAULT ''")
             } catch (e: Exception) {}
         }
-        if (oldVersion < 9) {
+        if (oldVersion < 8) {
             try {
                 db.execSQL("DROP TABLE IF EXISTS ${TABLE_BLE}")
                 db.execSQL("DROP TABLE IF EXISTS ${TABLE_CELLS}")
@@ -155,13 +155,15 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
 
     fun cleanOldData() {
         val oneYearAgo = System.currentTimeMillis() - (1000L * 60 * 60 * 24 * 365)
-        val twentyFourHoursAgo = System.currentTimeMillis() - (1000L * 60 * 60 * 24)
         val db = writableDatabase
         db.delete(TABLE_OBS, "${COL_TIMESTAMP} < ?", arrayOf(oneYearAgo.toString()))
         db.delete(TABLE_APS, "${COL_LAST_SEEN} < ?", arrayOf(oneYearAgo.toString()))
         try {
-            db.delete(TABLE_BLE, "${COL_LAST_SEEN} < ?", arrayOf(twentyFourHoursAgo.toString()))
+            db.delete(TABLE_BLE, "${COL_LAST_SEEN} < ?", arrayOf(oneYearAgo.toString()))
             db.delete(TABLE_CELLS, "${COL_LAST_SEEN} < ?", arrayOf(oneYearAgo.toString()))
         } catch(e: Exception) {}
     }
 }
+"""
+with open('app/src/main/java/com/example/androidsignalswifi/DatabaseHelper.kt', 'w', encoding='utf-8') as f:
+    f.write(database_code)
