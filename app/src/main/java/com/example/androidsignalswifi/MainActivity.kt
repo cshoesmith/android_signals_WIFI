@@ -10,10 +10,15 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Search
@@ -21,15 +26,29 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.SettingsInputAntenna
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -174,8 +193,21 @@ enum class SecurityFilter { ALL, OPEN, SECURED }
 enum class TriangulationFilter { ALL, LEARNING, KNOWN }
 enum class BandFilter { ALL, BAND_2_4, BAND_5_GHZ, BAND_6_GHZ }
 enum class DeviceFilter { ALL, ROUTERS_ONLY, BLUETOOTH_ONLY, CELL_TOWERS_ONLY }
+enum class BleInterestFilter { ALL, INTERESTING }
 
-@OptIn(ExperimentalMaterial3Api::class)
+private val COMMON_BLE_TYPES = setOf(
+    "Apple Device", "Apple Nearby", "AirDrop", "AirPlay", "Apple Handoff", "AirPods",
+    "Samsung Device", "Google Device", "Microsoft Device",
+    "BLE Device", "Phone", "Earbuds", "Headphones", "Speaker"
+)
+
+fun isCommonBleDevice(ble: ScannedBle): Boolean = ble.deviceType in COMMON_BLE_TYPES
+
+val WifiTypeColor = Color(0xFF1976D2)
+val BleTypeColor = Color(0xFF8E24AA)
+val CellTypeColor = Color(0xFFE64A19)
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: CellSniffer) {
     val aps by wifiSniffer.scannedAps.collectAsState()
@@ -189,16 +221,26 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
     var triFilter by remember { mutableStateOf(TriangulationFilter.ALL) }
     var bandFilter by remember { mutableStateOf(BandFilter.ALL) }
     var devFilter by remember { mutableStateOf(DeviceFilter.ALL) }
+    var bleInterestFilter by remember { mutableStateOf(BleInterestFilter.ALL) }
 
     var showSecurityMenu by remember { mutableStateOf(false) }
     var showTriangulationMenu by remember { mutableStateOf(false) }
     var showBandMenu by remember { mutableStateOf(false) }
     var showDevMenu by remember { mutableStateOf(false) }
+    var showBleInterestMenu by remember { mutableStateOf(false) }
     var centerTrigger by remember { mutableIntStateOf(0) }
     var zoomInTrigger by remember { mutableIntStateOf(0) }
     var zoomOutTrigger by remember { mutableIntStateOf(0) }
 
     var showList by remember { mutableStateOf(false) }
+    var showAllInList by remember { mutableStateOf(false) }
+    var mapBounds by remember { mutableStateOf<org.osmdroid.util.BoundingBox?>(null) }
+    var apsGroupExpanded by remember { mutableStateOf(true) }
+    var blesGroupExpanded by remember { mutableStateOf(true) }
+    var cellsGroupExpanded by remember { mutableStateOf(true) }
+    var selectedListAp by remember { mutableStateOf<ScannedAp?>(null) }
+    var selectedListBle by remember { mutableStateOf<ScannedBle?>(null) }
+    var selectedListCell by remember { mutableStateOf<ScannedCell?>(null) }
     var showInfoDialog by remember { mutableStateOf(false) }
     var showFilters by remember { mutableStateOf(false) }
     var bleGroupDialogKey by remember { mutableStateOf<String?>(null) }
@@ -231,8 +273,18 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
         passSec && passTri && passBand && passDev
     }
 
-    val filteredBles = if (devFilter == DeviceFilter.ALL || devFilter == DeviceFilter.BLUETOOTH_ONLY) bles else emptyList()
+    val filteredBles = run {
+        val base = if (devFilter == DeviceFilter.ALL || devFilter == DeviceFilter.BLUETOOTH_ONLY) bles else emptyList()
+        if (bleInterestFilter == BleInterestFilter.INTERESTING) base.filter { !isCommonBleDevice(it) } else base
+    }
     val filteredCells = if (devFilter == DeviceFilter.ALL || devFilter == DeviceFilter.CELL_TOWERS_ONLY) cells else emptyList()
+
+    // "Local" for the list view means "currently within the map's visible area".
+    // When the "All" checkbox is unchecked, restrict the list to that area.
+    val bounds = mapBounds
+    val listAps = if (showAllInList || bounds == null) filteredAps else filteredAps.filter { bounds.contains(it.estLat, it.estLon) }
+    val listBles = if (showAllInList || bounds == null) filteredBles else filteredBles.filter { bounds.contains(it.estLat, it.estLon) }
+    val listCells = if (showAllInList || bounds == null) filteredCells else filteredCells.filter { bounds.contains(it.estLat, it.estLon) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         // Map behind everything
@@ -248,7 +300,8 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
             onBleGroupClick = { key, devices ->
                 bleGroupDialogKey = key
                 bleGroupDialogDevices = devices
-            }
+            },
+            onVisibleBoundsChanged = { mapBounds = it }
         )
 
         // Semi-transparent dark strip behind the status bar
@@ -288,11 +341,18 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                 when (devFilter) {
                     DeviceFilter.BLUETOOTH_ONLY -> {
                         Text("Bluetooth Devices", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                        val totalSeen = filteredBles.size
+                        val totalSeen = bles.size
+                        val displayedCount = filteredBles.size
                         val totalIdentified = filteredBles.count { it.name != "Unknown" && it.name.isNotEmpty() }
                         Row(modifier = Modifier.padding(top = 4.dp)) {
                             Text("Seen:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
                             Text("$totalSeen", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                        if (bleInterestFilter == BleInterestFilter.INTERESTING) {
+                            Row {
+                                Text("Interesting:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
+                                Text("$displayedCount", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
                         }
                         Row {
                             Text("Identified:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
@@ -473,6 +533,20 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                         DropdownMenuItem(text = { Text("Cell Towers Only") }, onClick = { devFilter = DeviceFilter.CELL_TOWERS_ONLY; showDevMenu = false })
                     }
                 }
+                Box {
+                    InputChip(
+                        selected = bleInterestFilter == BleInterestFilter.INTERESTING,
+                        onClick = { showBleInterestMenu = true },
+                        label = { Text("BLE: ${if (bleInterestFilter == BleInterestFilter.ALL) "All" else "Interesting"}") }
+                    )
+                    DropdownMenu(
+                        expanded = showBleInterestMenu,
+                        onDismissRequest = { showBleInterestMenu = false }
+                    ) {
+                        DropdownMenuItem(text = { Text("All BLE Devices") }, onClick = { bleInterestFilter = BleInterestFilter.ALL; showBleInterestMenu = false })
+                        DropdownMenuItem(text = { Text("Interesting Only") }, onClick = { bleInterestFilter = BleInterestFilter.INTERESTING; showBleInterestMenu = false })
+                    }
+                }
             }
         }
 
@@ -631,7 +705,11 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
         )
     }
 
-    if (showList) {
+    AnimatedVisibility(
+        visible = showList,
+        enter = fadeIn() + scaleIn(initialScale = 0.96f),
+        exit = fadeOut() + scaleOut(targetScale = 0.96f)
+    ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -640,6 +718,7 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
             ) {
                 Card(
                     shape = RoundedCornerShape(16.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
                     Column(
@@ -647,59 +726,361 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                             .fillMaxSize()
                             .padding(16.dp)
                     ) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .padding(bottom = 12.dp)
+                                .width(36.dp)
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(Color.Gray.copy(alpha = 0.35f))
+                        )
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Discovered Devices (${filteredAps.size + filteredBles.size + filteredCells.size})", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                            TextButton(onClick = { showList = false }) { Text("Close") }
+                            Text(
+                                "${if (showAllInList) "All Devices" else "Devices Nearby"} (${listAps.size + listBles.size + listCells.size})",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            IconButton(onClick = { showList = false }) {
+                                Icon(Icons.Filled.Close, contentDescription = "Close")
+                            }
                         }
-                        LazyColumn(
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(checked = showAllInList, onCheckedChange = { showAllInList = it })
+                            Text(
+                                "All Devices",
+                                fontSize = 13.sp
+                            )
+                        }
+                        HorizontalDivider(modifier = Modifier.padding(bottom = 4.dp))
+                        Box(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxWidth()
                         ) {
-                            items(filteredAps.sortedByDescending { it.totalWeight }) { ap ->
-                                Column(modifier = Modifier.padding(vertical = 8.dp)) {
-                                    Text("SSID: ${if(ap.ssid.isNotEmpty()) ap.ssid else "[Hidden]"}", fontWeight = FontWeight.Bold)
-                                    Text("BSSID: ${ap.bssid}  ->  Vendor: ${VendorLookup.getVendor(ap.bssid)}")
-                                    Text("Freq: ${ap.frequency} MHz | Standard: ${ap.wifiStandard}")
-                                    Text("RSSI: ${ap.rssi} dBm | Weight: ${ap.totalWeight.toInt()}")
-                                    
-                                    val secText = if (ap.securityType.isNotEmpty()) ap.securityType else if (ap.isSecured) "Secured" else "Open"
-                                    Text("Security: $secText")
-                                    Text("Caps: ${ap.capabilities}", fontSize = 12.sp, color = Color.LightGray)
-                                    
-                                    HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
+                            val listState = rememberLazyListState()
+                            LazyColumn(
+                                state = listState,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(end = 8.dp)
+                            ) {
+                                stickyHeader {
+                                    DeviceGroupHeader(
+                                        title = "WiFi Networks",
+                                        count = listAps.size,
+                                        icon = Icons.Filled.Wifi,
+                                        tint = WifiTypeColor,
+                                        expanded = apsGroupExpanded,
+                                        onToggle = { apsGroupExpanded = !apsGroupExpanded }
+                                    )
+                                }
+                                if (apsGroupExpanded) {
+                                    if (listAps.isEmpty()) {
+                                        item { EmptyGroupRow("No WiFi networks in view") }
+                                    } else {
+                                        items(listAps.sortedByDescending { it.rssi }, key = { it.bssid }) { ap ->
+                                            DeviceListRow(
+                                                primary = if (ap.ssid.isNotEmpty()) ap.ssid else "[Hidden]",
+                                                secondary = "${ap.frequency} MHz",
+                                                rssi = ap.rssi,
+                                                icon = Icons.Filled.Wifi,
+                                                tint = WifiTypeColor,
+                                                onClick = { selectedListAp = ap },
+                                                modifier = Modifier.animateItemPlacement()
+                                            )
+                                        }
+                                    }
+                                }
+                                stickyHeader {
+                                    DeviceGroupHeader(
+                                        title = "Bluetooth Devices",
+                                        count = listBles.size,
+                                        icon = Icons.Filled.Bluetooth,
+                                        tint = BleTypeColor,
+                                        expanded = blesGroupExpanded,
+                                        onToggle = { blesGroupExpanded = !blesGroupExpanded }
+                                    )
+                                }
+                                if (blesGroupExpanded) {
+                                    if (listBles.isEmpty()) {
+                                        item { EmptyGroupRow("No Bluetooth devices in view") }
+                                    } else {
+                                        items(listBles.sortedByDescending { it.rssi }, key = { it.mac }) { ble ->
+                                            DeviceListRow(
+                                                primary = if (ble.name.isNotEmpty()) ble.name else "[Unknown]",
+                                                secondary = ble.deviceType,
+                                                rssi = ble.rssi,
+                                                icon = Icons.Filled.Bluetooth,
+                                                tint = BleTypeColor,
+                                                onClick = { selectedListBle = ble },
+                                                modifier = Modifier.animateItemPlacement()
+                                            )
+                                        }
+                                    }
+                                }
+                                stickyHeader {
+                                    DeviceGroupHeader(
+                                        title = "Cell Towers",
+                                        count = listCells.size,
+                                        icon = Icons.Filled.SettingsInputAntenna,
+                                        tint = CellTypeColor,
+                                        expanded = cellsGroupExpanded,
+                                        onToggle = { cellsGroupExpanded = !cellsGroupExpanded }
+                                    )
+                                }
+                                if (cellsGroupExpanded) {
+                                    if (listCells.isEmpty()) {
+                                        item { EmptyGroupRow("No cell towers in view") }
+                                    } else {
+                                        items(listCells.sortedByDescending { it.rssi }, key = { it.cellId }) { cell ->
+                                            DeviceListRow(
+                                                primary = cell.cellId,
+                                                secondary = cell.networkType,
+                                                rssi = cell.rssi,
+                                                icon = Icons.Filled.SettingsInputAntenna,
+                                                tint = CellTypeColor,
+                                                onClick = { selectedListCell = cell },
+                                                modifier = Modifier.animateItemPlacement()
+                                            )
+                                        }
+                                    }
                                 }
                             }
-                            items(filteredBles.sortedByDescending { it.rssi }) { ble ->
-                                Column(modifier = Modifier.padding(vertical = 8.dp)) {
-                                    Text("BLE Name: ${if(ble.name.isNotEmpty()) ble.name else "[Unknown]"}", fontWeight = FontWeight.Bold)
-                                    Text("MAC: ${ble.mac}  ->  Vendor: ${VendorLookup.getVendor(ble.mac)}")
-                                    Text("RSSI: ${ble.rssi} dBm")
-                                    Text("Type: ${ble.deviceType}")
-                                    
-                                    HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
-                                }
-                            }
-                            items(filteredCells.sortedByDescending { it.rssi }) { cell ->
-                                Column(modifier = Modifier.padding(vertical = 8.dp)) {
-                                    Text("Cell Identity: ${cell.cellId}", fontWeight = FontWeight.Bold)
-                                    Text("Operator: ${cell.owner}")
-                                    Text("RSSI: ${cell.rssi} dBm")
-                                    Text("Network: ${cell.networkType}")
-                                    
-                                    HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
-                                }
-                            }
+                            SimpleVerticalScrollbar(
+                                listState = listState,
+                                modifier = Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .fillMaxHeight()
+                            )
                         }
                     }
                 }
             }
         }
+
+        // AP detail modal
+        if (selectedListAp != null) {
+            val ap = selectedListAp!!
+            AlertDialog(
+                onDismissRequest = { selectedListAp = null },
+                title = { Text(if (ap.ssid.isNotEmpty()) ap.ssid else "[Hidden]", fontWeight = FontWeight.Bold) },
+                text = {
+                    Column {
+                        Text("BSSID: ${ap.bssid}")
+                        Text("Vendor: ${VendorLookup.getVendor(ap.bssid)}")
+                        Text("Freq: ${ap.frequency} MHz | Standard: ${ap.wifiStandard}")
+                        Text("RSSI: ${ap.rssi} dBm | Weight: ${ap.totalWeight.toInt()}")
+                        val secText = if (ap.securityType.isNotEmpty()) ap.securityType else if (ap.isSecured) "Secured" else "Open"
+                        Text("Security: $secText")
+                        Text("Capabilities: ${ap.capabilities}", fontSize = 12.sp, color = Color.Gray)
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { selectedListAp = null }) { Text("Close") }
+                }
+            )
+        }
+
+        // BLE detail modal
+        if (selectedListBle != null) {
+            val ble = selectedListBle!!
+            AlertDialog(
+                onDismissRequest = { selectedListBle = null },
+                title = { Text(if (ble.name.isNotEmpty()) ble.name else "[Unknown]", fontWeight = FontWeight.Bold) },
+                text = {
+                    Column {
+                        Text("MAC: ${ble.mac}")
+                        Text("Vendor: ${VendorLookup.getVendor(ble.mac)}")
+                        Text("RSSI: ${ble.rssi} dBm | Weight: ${ble.totalWeight.toInt()}")
+                        Text("Type: ${ble.deviceType}")
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { selectedListBle = null }) { Text("Close") }
+                }
+            )
+        }
+
+        // Cell tower detail modal
+        if (selectedListCell != null) {
+            val cell = selectedListCell!!
+            AlertDialog(
+                onDismissRequest = { selectedListCell = null },
+                title = { Text(cell.cellId, fontWeight = FontWeight.Bold) },
+                text = {
+                    Column {
+                        Text("Operator: ${cell.owner}")
+                        Text("Network: ${cell.networkType}")
+                        Text("RSSI: ${cell.rssi} dBm | Weight: ${cell.totalWeight.toInt()}")
+                        Text("MCC/MNC: ${cell.mccMnc}")
+                        Text("LAC/TAC: ${cell.lac}")
+                        Text("PCI: ${cell.pci}")
+                        Text("Band: ${cell.band}")
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { selectedListCell = null }) { Text("Close") }
+                }
+            )
+        }
     }
+}
+
+@Composable
+fun DeviceGroupHeader(
+    title: String,
+    count: Int,
+    icon: ImageVector,
+    tint: Color,
+    expanded: Boolean,
+    onToggle: () -> Unit
+) {
+    val rotation by animateFloatAsState(targetValue = if (expanded) 180f else 0f, label = "chevronRotation")
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onToggle() }
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(tint.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
+            }
+            Text(title, fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = Modifier.weight(1f))
+            Text(
+                "$count",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
+            )
+            Icon(
+                Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                modifier = Modifier.rotate(rotation)
+            )
+        }
+        HorizontalDivider()
+    }
+}
+
+@Composable
+fun EmptyGroupRow(text: String) {
+    Text(
+        text,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 16.dp),
+        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        fontSize = 13.sp,
+        color = Color.Gray
+    )
+    HorizontalDivider()
+}
+
+@Composable
+fun SignalIndicator(rssi: Int) {
+    val color = when {
+        rssi >= -60 -> Color(0xFF2E7D32)
+        rssi >= -80 -> Color(0xFFF9A825)
+        else -> Color(0xFFC62828)
+    }
+    Column(horizontalAlignment = Alignment.End) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(color)
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text("$rssi dBm", fontSize = 11.sp, color = Color.Gray)
+    }
+}
+
+@Composable
+fun SimpleVerticalScrollbar(listState: androidx.compose.foundation.lazy.LazyListState, modifier: Modifier = Modifier) {
+    val layoutInfo = listState.layoutInfo
+    val totalItems = layoutInfo.totalItemsCount
+    val visibleItems = layoutInfo.visibleItemsInfo.size
+    if (totalItems == 0 || visibleItems >= totalItems) return
+
+    val thumbFraction = (visibleItems.toFloat() / totalItems.toFloat()).coerceIn(0.08f, 1f)
+    val maxScrollIndex = (totalItems - visibleItems).coerceAtLeast(1)
+    val topFraction = (listState.firstVisibleItemIndex.toFloat() / maxScrollIndex.toFloat()).coerceIn(0f, 1f) * (1f - thumbFraction)
+
+    BoxWithConstraints(modifier = modifier.width(6.dp)) {
+        val trackHeight = maxHeight
+        Box(
+            modifier = Modifier
+                .offset(y = trackHeight * topFraction)
+                .width(4.dp)
+                .height(trackHeight * thumbFraction)
+                .align(Alignment.TopEnd)
+                .background(Color.Gray.copy(alpha = 0.5f), RoundedCornerShape(2.dp))
+        )
+    }
+}
+
+@Composable
+fun DeviceListRow(
+    primary: String,
+    secondary: String,
+    rssi: Int,
+    icon: ImageVector,
+    tint: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    ListItem(
+        headlineContent = {
+            Text(primary, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
+        },
+        supportingContent = {
+            Text(secondary, fontSize = 12.sp, color = Color.Gray, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        },
+        leadingContent = {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(tint.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+            }
+        },
+        trailingContent = { SignalIndicator(rssi) },
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+    )
+    HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
 }
 
 @Composable

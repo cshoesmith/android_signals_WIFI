@@ -10,7 +10,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import org.osmdroid.config.Configuration
+import org.osmdroid.events.MapListener
+import org.osmdroid.events.ScrollEvent
+import org.osmdroid.events.ZoomEvent
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Polygon
@@ -143,10 +147,12 @@ fun MapScreen(
     isScanning: Boolean = false,
     zoomInTrigger: Int = 0,
     zoomOutTrigger: Int = 0,
-    onBleGroupClick: (groupKey: String, devices: List<ScannedBle>) -> Unit = { _, _ -> }
+    onBleGroupClick: (groupKey: String, devices: List<ScannedBle>) -> Unit = { _, _ -> },
+    onVisibleBoundsChanged: (BoundingBox) -> Unit = {}
 ) {
     val context = LocalContext.current
     Configuration.getInstance().load(context, context.getSharedPreferences("osmdroid", 0))
+    val currentOnVisibleBoundsChanged by rememberUpdatedState(onVisibleBoundsChanged)
 
     var mapViewState by remember { mutableStateOf<MapView?>(null) }
     var initialCenterSet by remember { mutableStateOf(false) }
@@ -214,6 +220,17 @@ fun MapScreen(
                     }
                     override fun onFling(pEvent1: android.view.MotionEvent?, pEvent2: android.view.MotionEvent?, pVelocityX: Float, pVelocityY: Float, pMapView: MapView?): Boolean {
                         lastManualMoveTime[0] = System.currentTimeMillis()
+                        return false
+                    }
+                })
+                // Report the visible map area whenever the user pans or zooms
+                addMapListener(object : MapListener {
+                    override fun onScroll(event: ScrollEvent?): Boolean {
+                        post { currentOnVisibleBoundsChanged(boundingBox) }
+                        return false
+                    }
+                    override fun onZoom(event: ZoomEvent?): Boolean {
+                        post { currentOnVisibleBoundsChanged(boundingBox) }
                         return false
                     }
                 })
@@ -419,10 +436,11 @@ fun MapScreen(
             }
 
             if (currentLocation != null) {
-                mapView.overlays.add(UserLocationOverlay(currentLocation))      
+                mapView.overlays.add(UserLocationOverlay(currentLocation))
             }
 
             mapView.invalidate()
+            mapView.post { currentOnVisibleBoundsChanged(mapView.boundingBox) }
         }
     )
 }
