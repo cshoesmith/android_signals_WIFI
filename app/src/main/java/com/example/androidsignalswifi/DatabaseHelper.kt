@@ -8,7 +8,7 @@ import android.util.Log
 
 data class ObservationStats(val count: Int, val firstSeen: Long, val lastSeen: Long)
 
-data class CellSample(val lat: Double, val lon: Double, val rssi: Int, val networkType: String)
+data class CellSample(val lat: Double, val lon: Double, val rssi: Int, val networkType: String, val mccMnc: String)
 
 class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
@@ -173,13 +173,13 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
     fun getCellSignalSamples(limit: Int = 20000): List<CellSample> {
         val out = ArrayList<CellSample>()
         readableDatabase.rawQuery(
-            "SELECT o.$COL_LAT, o.$COL_LON, o.$COL_RSSI, c.$COL_CELL_NETWORK " +
+            "SELECT o.$COL_LAT, o.$COL_LON, o.$COL_RSSI, c.$COL_CELL_NETWORK, c.$COL_CELL_MCC_MNC " +
                 "FROM $TABLE_OBS o JOIN $TABLE_CELLS c ON o.$COL_BSSID = c.$COL_CELL_ID " +
                 "ORDER BY o.$COL_TIMESTAMP DESC LIMIT ?",
             arrayOf(limit.toString())
         ).use { c ->
             while (c.moveToNext()) {
-                out.add(CellSample(c.getDouble(0), c.getDouble(1), c.getInt(2), c.getString(3) ?: ""))
+                out.add(CellSample(c.getDouble(0), c.getDouble(1), c.getInt(2), c.getString(3) ?: "", c.getString(4) ?: ""))
             }
         }
         return out

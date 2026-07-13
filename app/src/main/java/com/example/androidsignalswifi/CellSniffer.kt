@@ -12,6 +12,9 @@ import android.telephony.CellInfoLte
 import android.telephony.CellInfoWcdma
 import android.telephony.CellInfoNr
 import android.telephony.TelephonyManager
+import android.telephony.SubscriptionInfo
+import android.telephony.SubscriptionManager
+import android.os.Build
 import android.util.Log
 import com.google.android.gms.location.*
 import kotlinx.coroutines.*
@@ -33,6 +36,14 @@ data class ScannedCell(
     val lastSeen: Long = 0L
 )
 
+data class SimInfo(
+    val subId: Int,
+    val slotIndex: Int,
+    val carrierName: String,
+    val mccMnc: String,
+    val isDefault: Boolean
+)
+
 class CellSniffer(private val context: Context) {
     private val dbHelper = DatabaseHelper(context)
     private val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
@@ -43,6 +54,9 @@ class CellSniffer(private val context: Context) {
 
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning
+
+    private val _activeSims = MutableStateFlow<List<SimInfo>>(emptyList())
+    val activeSims: StateFlow<List<SimInfo>> = _activeSims
 
     private var scanningJob: Job? = null
     var currentLocation: Location? = null
@@ -88,22 +102,52 @@ class CellSniffer(private val context: Context) {
         }
     }
 
+    // Enumerate active SIMs and publish them for the UI. Each sample later inherits its
+    // tower's MCC/MNC, so the heatmap can be filtered per carrier without a schema change.
+    @SuppressLint("MissingPermission")
+    private fun refreshActiveSims(): List<SimInfo> {
+        val sm = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as? SubscriptionManager
+            ?: return emptyList()
+        val list = try { sm.activeSubscriptionInfoList } catch (e: Exception) { null } ?: emptyList()
+        val defaultSub = SubscriptionManager.getDefaultSubscriptionId()
+        val sims = list.map { info: SubscriptionInfo ->
+            val mcc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) info.mccString ?: "" else @Suppress("DEPRECATION") info.mcc.toString()
+            val mnc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) info.mncString ?: "" else @Suppress("DEPRECATION") info.mnc.toString()
+            SimInfo(
+                subId = info.subscriptionId,
+                slotIndex = info.simSlotIndex,
+                carrierName = info.carrierName?.toString()?.ifBlank { "SIM ${info.simSlotIndex + 1}" } ?: "SIM ${info.simSlotIndex + 1}",
+                mccMnc = "$mcc$mnc",
+                isDefault = info.subscriptionId == defaultSub
+            )
+        }.sortedBy { it.slotIndex }
+        _activeSims.value = sims
+        return sims
+    }
+
     @SuppressLint("MissingPermission")
     fun startScanning() {
         if (_isScanning.value) return
-        
+
         val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000L).build()
         fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper())
 
         _isScanning.value = true
+        refreshActiveSims()
         scanningJob = CoroutineScope(Dispatchers.IO).launch {
             while (isActive) {
                 val currentLoc = currentLocation
                 if (currentLoc != null) {
+                    val sims = refreshActiveSims()
                     try {
-                        val allCellInfo = telephonyManager.allCellInfo
-                        if (allCellInfo != null) {
-                            processCells(allCellInfo, currentLoc)
+                        if (sims.size > 1) {
+                            // Sample every SIM each cycle so both carriers are collected in parallel
+                            for (sim in sims) {
+                                val tm = telephonyManager.createForSubscriptionId(sim.subId)
+                                tm.allCellInfo?.let { processCells(it, currentLoc) }
+                            }
+                        } else {
+                            telephonyManager.allCellInfo?.let { processCells(it, currentLoc) }
                         }
                     } catch (e: Exception) {
                         Log.e("CellSniffer", "Error getting cell info", e)

@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.SettingsInputAntenna
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.foundation.border
 import androidx.compose.ui.draw.shadow
 import androidx.compose.material.icons.outlined.Search
@@ -248,10 +249,11 @@ private const val HEAT_GRID_DEG = 0.00015 // ~16 m grid cells
 
 // Collapse raw samples onto a grid, keeping the best signal ever seen at each cell,
 // so the map shows where a call is most likely to succeed rather than momentary dips.
-fun aggregateHeatSamples(raw: List<CellSample>): List<HeatSample> {
+fun aggregateHeatSamples(raw: List<CellSample>, targetMccMnc: String? = null): List<HeatSample> {
     val grid = HashMap<Long, HeatSample>()
     for (s in raw) {
         if (s.lat == 0.0 && s.lon == 0.0) continue
+        if (!targetMccMnc.isNullOrBlank() && s.mccMnc != targetMccMnc) continue
         val q = cellSignalQuality(s.rssi, s.networkType)
         val latKey = Math.round(s.lat / HEAT_GRID_DEG)
         val lonKey = Math.round(s.lon / HEAT_GRID_DEG)
@@ -293,6 +295,7 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
     
     val isScanning by wifiSniffer.isScanning.collectAsState()
     val lastScan by wifiSniffer.lastScanTime.collectAsState()
+    val sims by cellSniffer.activeSims.collectAsState()
     
     var secFilter by rememberSaveable { mutableStateOf(SecurityFilter.ALL) }
     var triFilter by rememberSaveable { mutableStateOf(TriangulationFilter.ALL) }
@@ -303,6 +306,7 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
     var sniffCell by rememberSaveable { mutableStateOf(true) }
     var excludeTvs by rememberSaveable { mutableStateOf(false) }
     var cellHeatmapMode by rememberSaveable { mutableStateOf(false) }
+    var selectedSubId by rememberSaveable { mutableStateOf<Int?>(null) }
 
     var showSecurityMenu by remember { mutableStateOf(false) }
     var showTriangulationMenu by remember { mutableStateOf(false) }
@@ -329,11 +333,21 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
     val appContext = LocalContext.current.applicationContext
     val dbHelper = remember { DatabaseHelper(appContext) }
 
-    // Rebuild the heatmap when entering the mode and on every new cell scan.
+    // Default the heatmap to the default SIM once SIMs are known.
+    LaunchedEffect(sims) {
+        if (sims.isNotEmpty() && (selectedSubId == null || sims.none { it.subId == selectedSubId })) {
+            selectedSubId = sims.firstOrNull { it.isDefault }?.subId ?: sims.first().subId
+        }
+    }
+    val selectedSim = sims.firstOrNull { it.subId == selectedSubId }
+
+    // Rebuild the heatmap when entering the mode, on every new cell scan, or on SIM switch.
+    // Filter by the selected SIM's carrier so each SIM reports individually.
     var heatSamples by remember { mutableStateOf<List<HeatSample>>(emptyList()) }
-    LaunchedEffect(cellHeatmapMode, cells) {
+    LaunchedEffect(cellHeatmapMode, cells, selectedSubId) {
         if (cellHeatmapMode) {
-            heatSamples = withContext(Dispatchers.IO) { aggregateHeatSamples(dbHelper.getCellSignalSamples()) }
+            val mcc = sims.firstOrNull { it.subId == selectedSubId }?.mccMnc
+            heatSamples = withContext(Dispatchers.IO) { aggregateHeatSamples(dbHelper.getCellSignalSamples(), mcc) }
         }
     }
 
@@ -454,6 +468,13 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                 )
                 if (cellHeatmapMode) {
                     HeatLegend()
+                    if (sims.size > 1) {
+                        SimToggleButton(selectedSim?.carrierName ?: "SIM") {
+                            val idx = sims.indexOfFirst { it.subId == selectedSubId }
+                            val next = sims[(if (idx < 0) 0 else idx + 1) % sims.size]
+                            selectedSubId = next.subId
+                        }
+                    }
                 } else {
                     Row(
                         modifier = Modifier.padding(top = 4.dp),
@@ -1134,6 +1155,23 @@ fun HeatmapToggleButton(active: Boolean, onClick: () -> Unit) {
             tint = Color.White,
             modifier = Modifier.size(24.dp)
         )
+    }
+}
+
+@Composable
+fun SimToggleButton(label: String, onClick: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .padding(top = 6.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .clickable { onClick() }
+            .background(Color.White.copy(alpha = 0.15f), RoundedCornerShape(6.dp))
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        Icon(Icons.Filled.SwapHoriz, contentDescription = "Switch SIM", tint = Color.White, modifier = Modifier.size(14.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(label, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
     }
 }
 
