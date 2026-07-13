@@ -6,6 +6,10 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.util.Log
 
+data class ObservationStats(val count: Int, val firstSeen: Long, val lastSeen: Long)
+
+data class CellSample(val lat: Double, val lon: Double, val rssi: Int, val networkType: String)
+
 class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
     companion object {
@@ -151,6 +155,34 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
                 )
             } catch (e: Exception) {}
         }
+    }
+
+    // Observations are keyed by BSSID for APs, MAC for BLE, and cell id for towers.
+    fun getObservationStats(id: String): ObservationStats {
+        readableDatabase.rawQuery(
+            "SELECT COUNT(*), MIN($COL_TIMESTAMP), MAX($COL_TIMESTAMP) FROM $TABLE_OBS WHERE $COL_BSSID = ?",
+            arrayOf(id)
+        ).use { c ->
+            return if (c.moveToFirst()) ObservationStats(c.getInt(0), c.getLong(1), c.getLong(2))
+            else ObservationStats(0, 0L, 0L)
+        }
+    }
+
+    // Geolocated cell signal samples for the heatmap: every observation whose id
+    // matches a known tower, newest first, tagged with that tower's network type.
+    fun getCellSignalSamples(limit: Int = 20000): List<CellSample> {
+        val out = ArrayList<CellSample>()
+        readableDatabase.rawQuery(
+            "SELECT o.$COL_LAT, o.$COL_LON, o.$COL_RSSI, c.$COL_CELL_NETWORK " +
+                "FROM $TABLE_OBS o JOIN $TABLE_CELLS c ON o.$COL_BSSID = c.$COL_CELL_ID " +
+                "ORDER BY o.$COL_TIMESTAMP DESC LIMIT ?",
+            arrayOf(limit.toString())
+        ).use { c ->
+            while (c.moveToNext()) {
+                out.add(CellSample(c.getDouble(0), c.getDouble(1), c.getInt(2), c.getString(3) ?: ""))
+            }
+        }
+        return out
     }
 
     fun cleanOldData() {

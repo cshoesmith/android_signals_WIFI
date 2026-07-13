@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Add
@@ -30,6 +31,9 @@ import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.SettingsInputAntenna
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.foundation.border
+import androidx.compose.ui.draw.shadow
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -54,10 +58,6 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.painterResource
 
 
 
@@ -79,8 +79,10 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.ui.platform.LocalContext
 import android.content.pm.PackageInfo
 import androidx.core.view.WindowCompat
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -192,7 +194,6 @@ fun SplashScreen() {
 enum class SecurityFilter { ALL, OPEN, SECURED }
 enum class TriangulationFilter { ALL, LEARNING, KNOWN }
 enum class BandFilter { ALL, BAND_2_4, BAND_5_GHZ, BAND_6_GHZ }
-enum class DeviceFilter { ALL, ROUTERS_ONLY, BLUETOOTH_ONLY, CELL_TOWERS_ONLY }
 enum class BleInterestFilter { ALL, INTERESTING }
 
 private val COMMON_BLE_TYPES = setOf(
@@ -207,6 +208,82 @@ val WifiTypeColor = Color(0xFF1976D2)
 val BleTypeColor = Color(0xFF8E24AA)
 val CellTypeColor = Color(0xFFE64A19)
 
+// Log-distance path-loss estimate. txPower is the assumed RSSI at 1 meter;
+// most BLE devices do not advertise their actual calibrated value.
+private const val BLE_ASSUMED_TX_POWER = -59.0
+private const val BLE_PATH_LOSS_EXPONENT = 2.5
+
+fun estimateBleDistanceMeters(rssi: Int): Double {
+    return Math.pow(10.0, (BLE_ASSUMED_TX_POWER - rssi) / (10.0 * BLE_PATH_LOSS_EXPONENT))
+}
+
+fun formatDistance(meters: Double): String {
+    return when {
+        meters < 1.0 -> "${(meters * 100).toInt()} cm"
+        meters >= 1000.0 -> "%.1f km".format(meters / 1000.0)
+        else -> "%.1f m".format(meters)
+    }
+}
+
+// Log-distance estimate for cell towers. Very rough: a single RSRP/RSSI reading
+// maps poorly to real range, so treat this as an order-of-magnitude hint only.
+private const val CELL_ASSUMED_TX_POWER = -40.0
+private const val CELL_PATH_LOSS_EXPONENT = 3.0
+
+fun estimateCellDistanceMeters(rssi: Int): Double {
+    if (rssi >= 0) return 0.0
+    return Math.pow(10.0, (CELL_ASSUMED_TX_POWER - rssi) / (10.0 * CELL_PATH_LOSS_EXPONENT))
+}
+
+// Normalize a cell reading to 0 (poor) .. 1 (good). 5G NR uses a higher usable floor
+// than 4G/legacy, so the good/poor window shifts by network type.
+fun cellSignalQuality(rssi: Int, networkType: String): Float {
+    val nr = networkType.contains("NR")
+    val weak = if (nr) -115f else -120f
+    val strong = if (nr) -80f else -85f
+    return ((rssi - weak) / (strong - weak)).coerceIn(0f, 1f)
+}
+
+private const val HEAT_GRID_DEG = 0.00015 // ~16 m grid cells
+
+// Collapse raw samples onto a grid, keeping the best signal ever seen at each cell,
+// so the map shows where a call is most likely to succeed rather than momentary dips.
+fun aggregateHeatSamples(raw: List<CellSample>): List<HeatSample> {
+    val grid = HashMap<Long, HeatSample>()
+    for (s in raw) {
+        if (s.lat == 0.0 && s.lon == 0.0) continue
+        val q = cellSignalQuality(s.rssi, s.networkType)
+        val latKey = Math.round(s.lat / HEAT_GRID_DEG)
+        val lonKey = Math.round(s.lon / HEAT_GRID_DEG)
+        val key = latKey * 4_000_000L + lonKey
+        val existing = grid[key]
+        if (existing == null || q > existing.quality) {
+            grid[key] = HeatSample(latKey * HEAT_GRID_DEG, lonKey * HEAT_GRID_DEG, q)
+        }
+    }
+    return grid.values.toList()
+}
+
+// Free-space path loss estimate for WiFi; rough indoors but useful for relative comparison.
+fun estimateWifiDistanceMeters(rssi: Int, freqMhz: Int): Double {
+    if (freqMhz <= 0) return 0.0
+    val exp = (27.55 - 20.0 * Math.log10(freqMhz.toDouble()) + Math.abs(rssi)) / 20.0
+    return Math.pow(10.0, exp)
+}
+
+fun channelFromFrequency(freq: Int): Int = when {
+    freq == 2484 -> 14
+    freq in 2412..2472 -> (freq - 2407) / 5
+    freq in 5160..5895 -> (freq - 5000) / 5
+    freq in 5955..7115 -> (freq - 5950) / 5
+    else -> 0
+}
+
+fun formatTimestamp(ts: Long): String {
+    if (ts <= 0L) return "Unknown"
+    return java.text.SimpleDateFormat("MMM dd, yyyy HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(ts))
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: CellSniffer) {
@@ -217,16 +294,19 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
     val isScanning by wifiSniffer.isScanning.collectAsState()
     val lastScan by wifiSniffer.lastScanTime.collectAsState()
     
-    var secFilter by remember { mutableStateOf(SecurityFilter.ALL) }
-    var triFilter by remember { mutableStateOf(TriangulationFilter.ALL) }
-    var bandFilter by remember { mutableStateOf(BandFilter.ALL) }
-    var devFilter by remember { mutableStateOf(DeviceFilter.ALL) }
-    var bleInterestFilter by remember { mutableStateOf(BleInterestFilter.ALL) }
+    var secFilter by rememberSaveable { mutableStateOf(SecurityFilter.ALL) }
+    var triFilter by rememberSaveable { mutableStateOf(TriangulationFilter.ALL) }
+    var bandFilter by rememberSaveable { mutableStateOf(BandFilter.ALL) }
+    var bleInterestFilter by rememberSaveable { mutableStateOf(BleInterestFilter.ALL) }
+    var sniffWifi by rememberSaveable { mutableStateOf(true) }
+    var sniffBle by rememberSaveable { mutableStateOf(true) }
+    var sniffCell by rememberSaveable { mutableStateOf(true) }
+    var excludeTvs by rememberSaveable { mutableStateOf(false) }
+    var cellHeatmapMode by rememberSaveable { mutableStateOf(false) }
 
     var showSecurityMenu by remember { mutableStateOf(false) }
     var showTriangulationMenu by remember { mutableStateOf(false) }
     var showBandMenu by remember { mutableStateOf(false) }
-    var showDevMenu by remember { mutableStateOf(false) }
     var showBleInterestMenu by remember { mutableStateOf(false) }
     var centerTrigger by remember { mutableIntStateOf(0) }
     var zoomInTrigger by remember { mutableIntStateOf(0) }
@@ -246,45 +326,66 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
     var bleGroupDialogKey by remember { mutableStateOf<String?>(null) }
     var bleGroupDialogDevices by remember { mutableStateOf<List<ScannedBle>>(emptyList()) }
     val scope = rememberCoroutineScope()
+    val appContext = LocalContext.current.applicationContext
+    val dbHelper = remember { DatabaseHelper(appContext) }
 
-    val filteredAps = aps.filter { ap ->
-        val passSec = when (secFilter) {
-            SecurityFilter.ALL -> true
-            SecurityFilter.OPEN -> !ap.isSecured
-            SecurityFilter.SECURED -> ap.isSecured
+    // Rebuild the heatmap when entering the mode and on every new cell scan.
+    var heatSamples by remember { mutableStateOf<List<HeatSample>>(emptyList()) }
+    LaunchedEffect(cellHeatmapMode, cells) {
+        if (cellHeatmapMode) {
+            heatSamples = withContext(Dispatchers.IO) { aggregateHeatSamples(dbHelper.getCellSignalSamples()) }
         }
-        val passTri = when (triFilter) {
-            TriangulationFilter.ALL -> true
-            TriangulationFilter.LEARNING -> ap.totalWeight <= 200.0
-            TriangulationFilter.KNOWN -> ap.totalWeight > 200.0
-        }
-        val passBand = when (bandFilter) {
-            BandFilter.ALL -> true
-            BandFilter.BAND_2_4 -> ap.frequency in 2400..2499
-            BandFilter.BAND_5_GHZ -> ap.frequency in 5000..5999
-            BandFilter.BAND_6_GHZ -> ap.frequency in 5925..7125
-        }
-        val passDev = when (devFilter) {
-            DeviceFilter.ALL -> true
-            DeviceFilter.ROUTERS_ONLY -> !ap.capabilities.contains("P2P") && !ap.capabilities.contains("WFD")
-            DeviceFilter.BLUETOOTH_ONLY -> false
-            DeviceFilter.CELL_TOWERS_ONLY -> false
-        }
-        passSec && passTri && passBand && passDev
     }
 
-    val filteredBles = run {
-        val base = if (devFilter == DeviceFilter.ALL || devFilter == DeviceFilter.BLUETOOTH_ONLY) bles else emptyList()
+    // Memoized so recompositions triggered by unrelated state (map pans, timer ticks)
+    // reuse the same list instances and do not force a map overlay rebuild.
+    val filteredAps = remember(aps, secFilter, triFilter, bandFilter, sniffWifi, excludeTvs) {
+        if (!sniffWifi) emptyList() else aps.filter { ap ->
+            val passSec = when (secFilter) {
+                SecurityFilter.ALL -> true
+                SecurityFilter.OPEN -> !ap.isSecured
+                SecurityFilter.SECURED -> ap.isSecured
+            }
+            val passTri = when (triFilter) {
+                TriangulationFilter.ALL -> true
+                TriangulationFilter.LEARNING -> ap.totalWeight <= 200.0
+                TriangulationFilter.KNOWN -> ap.totalWeight > 200.0
+            }
+            val passBand = when (bandFilter) {
+                BandFilter.ALL -> true
+                BandFilter.BAND_2_4 -> ap.frequency in 2400..2499
+                BandFilter.BAND_5_GHZ -> ap.frequency in 5000..5999
+                BandFilter.BAND_6_GHZ -> ap.frequency in 5925..7125
+            }
+            val passDev = !excludeTvs || (!ap.capabilities.contains("P2P") && !ap.capabilities.contains("WFD"))
+            passSec && passTri && passBand && passDev
+        }
+    }
+
+    val filteredBles = remember(bles, sniffBle, bleInterestFilter) {
+        val base = if (sniffBle) bles else emptyList()
         if (bleInterestFilter == BleInterestFilter.INTERESTING) base.filter { !isCommonBleDevice(it) } else base
     }
-    val filteredCells = if (devFilter == DeviceFilter.ALL || devFilter == DeviceFilter.CELL_TOWERS_ONLY) cells else emptyList()
+    val filteredCells = remember(cells, sniffCell) {
+        if (sniffCell) cells else emptyList()
+    }
 
     // "Local" for the list view means "currently within the map's visible area".
     // When the "All" checkbox is unchecked, restrict the list to that area.
+    // Sorted here once per data change instead of on every recomposition inside the list.
     val bounds = mapBounds
-    val listAps = if (showAllInList || bounds == null) filteredAps else filteredAps.filter { bounds.contains(it.estLat, it.estLon) }
-    val listBles = if (showAllInList || bounds == null) filteredBles else filteredBles.filter { bounds.contains(it.estLat, it.estLon) }
-    val listCells = if (showAllInList || bounds == null) filteredCells else filteredCells.filter { bounds.contains(it.estLat, it.estLon) }
+    val listAps = remember(filteredAps, showAllInList, bounds) {
+        (if (showAllInList || bounds == null) filteredAps else filteredAps.filter { bounds.contains(it.estLat, it.estLon) })
+            .sortedByDescending { it.rssi }
+    }
+    val listBles = remember(filteredBles, showAllInList, bounds) {
+        (if (showAllInList || bounds == null) filteredBles else filteredBles.filter { bounds.contains(it.estLat, it.estLon) })
+            .sortedByDescending { it.rssi }
+    }
+    val listCells = remember(filteredCells, showAllInList, bounds) {
+        (if (showAllInList || bounds == null) filteredCells else filteredCells.filter { bounds.contains(it.estLat, it.estLon) })
+            .sortedByDescending { it.rssi }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         // Map behind everything
@@ -297,6 +398,8 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
             isScanning = isScanning,
             zoomInTrigger = zoomInTrigger,
             zoomOutTrigger = zoomOutTrigger,
+            cellHeatmapMode = cellHeatmapMode,
+            heatSamples = heatSamples,
             onBleGroupClick = { key, devices ->
                 bleGroupDialogKey = key
                 bleGroupDialogDevices = devices
@@ -332,70 +435,49 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.Top
         ) {
-            // Left Table / Column
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+            // Map legend: counts found per signal type; dimmed when that type is unchecked
             Column(
                 modifier = Modifier
                     .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
                     .padding(8.dp)
             ) {
-                when (devFilter) {
-                    DeviceFilter.BLUETOOTH_ONLY -> {
-                        Text("Bluetooth Devices", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                        val totalSeen = bles.size
-                        val displayedCount = filteredBles.size
-                        val totalIdentified = filteredBles.count { it.name != "Unknown" && it.name.isNotEmpty() }
-                        Row(modifier = Modifier.padding(top = 4.dp)) {
-                            Text("Seen:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
-                            Text("$totalSeen", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    if (cellHeatmapMode) "Cell Signal" else "Devices Found",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                )
+                if (cellHeatmapMode) {
+                    HeatLegend()
+                } else {
+                    Row(
+                        modifier = Modifier.padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        FoundBox(Icons.Filled.Bluetooth, BleTypeColor, bles.size, sniffBle) {
+                            sniffBle = !sniffBle
+                            if (sniffBle) bleSniffer.startScanning() else bleSniffer.stopScanning()
                         }
-                        if (bleInterestFilter == BleInterestFilter.INTERESTING) {
-                            Row {
-                                Text("Interesting:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
-                                Text("$displayedCount", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
+                        FoundBox(Icons.Filled.Wifi, WifiTypeColor, aps.size, sniffWifi) {
+                            sniffWifi = !sniffWifi
+                            if (sniffWifi) wifiSniffer.startScanning() else wifiSniffer.stopScanning()
                         }
-                        Row {
-                            Text("Identified:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
-                            Text("$totalIdentified", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                    DeviceFilter.CELL_TOWERS_ONLY -> {
-                        Text("Cell Towers", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                        val totalSeen = filteredCells.size
-                        val totalTriangulated = filteredCells.count { it.totalWeight > 200.0 }
-                        val uniqueOperators = filteredCells.map { it.owner }.distinct().size
-                        Row(modifier = Modifier.padding(top = 4.dp)) {
-                            Text("Seen:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
-                            Text("$totalSeen", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                        Row {
-                            Text("Triangulated:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
-                            Text("$totalTriangulated", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                        Row {
-                            Text("Operators:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
-                            Text("$uniqueOperators", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                    else -> {
-                        Text("Access Points", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                        val totalSeen = aps.size
-                        val totalTriangulated = filteredAps.count { it.totalWeight > 200.0 }
-                        val totalOpen = filteredAps.count { !it.isSecured }
-                        Row(modifier = Modifier.padding(top = 4.dp)) {
-                            Text("Seen:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
-                            Text("$totalSeen", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                        Row {
-                            Text("Triangulated:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
-                            Text("$totalTriangulated", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                        Row {
-                            Text("Open:", color = Color.LightGray, fontSize = 11.sp, modifier = Modifier.width(76.dp))
-                            Text("$totalOpen", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        FoundBox(Icons.Filled.SettingsInputAntenna, CellTypeColor, cells.size, sniffCell) {
+                            sniffCell = !sniffCell
+                            if (sniffCell) cellSniffer.startScanning() else cellSniffer.stopScanning()
                         }
                     }
                 }
+            }
+            HeatmapToggleButton(active = cellHeatmapMode) {
+                cellHeatmapMode = !cellHeatmapMode
+                if (cellHeatmapMode) cellSniffer.startScanning()
+            }
             }
 
             // Right side: Info button only
@@ -415,8 +497,8 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
             )
         }
 
-        // Filters tab (only visible when collapsed)
-        if (!showFilters) {
+        // Filters tab (only visible when collapsed and not in heatmap mode)
+        if (!showFilters && !cellHeatmapMode) {
             Box(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
@@ -517,22 +599,7 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                         DropdownMenuItem(text = { Text("6 GHz Only") }, onClick = { bandFilter = BandFilter.BAND_6_GHZ; showBandMenu = false })
                     }
                 }
-                Box {
-                    InputChip(
-                        selected = true,
-                        onClick = { showDevMenu = true },
-                        label = { Text("Type: ${devFilter.name}") }
-                    )
-                    DropdownMenu(
-                        expanded = showDevMenu,
-                        onDismissRequest = { showDevMenu = false }
-                    ) {
-                        DropdownMenuItem(text = { Text("All Devices") }, onClick = { devFilter = DeviceFilter.ALL; showDevMenu = false })
-                        DropdownMenuItem(text = { Text("Exclude Smart TVs & Printers") }, onClick = { devFilter = DeviceFilter.ROUTERS_ONLY; showDevMenu = false })
-                        DropdownMenuItem(text = { Text("Bluetooth Devices Only") }, onClick = { devFilter = DeviceFilter.BLUETOOTH_ONLY; showDevMenu = false })
-                        DropdownMenuItem(text = { Text("Cell Towers Only") }, onClick = { devFilter = DeviceFilter.CELL_TOWERS_ONLY; showDevMenu = false })
-                    }
-                }
+                SnifferCheckRow("Hide TVs & Printers", excludeTvs) { excludeTvs = it }
                 Box {
                     InputChip(
                         selected = bleInterestFilter == BleInterestFilter.INTERESTING,
@@ -547,6 +614,23 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                         DropdownMenuItem(text = { Text("Interesting Only") }, onClick = { bleInterestFilter = BleInterestFilter.INTERESTING; showBleInterestMenu = false })
                     }
                 }
+            }
+        }
+
+        // Empty heatmap hint
+        if (cellHeatmapMode && heatSamples.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                Text(
+                    "Walk around to build the signal map.",
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
             }
         }
 
@@ -604,9 +688,11 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                 Icon(Icons.Filled.LocationOn, contentDescription = "Center Map")
             }
 
-            // List Button
-            FloatingActionButton(onClick = { showList = true }) {
-                Icon(Icons.Filled.List, contentDescription = "List Devices")
+            // List Button (hidden in heatmap mode)
+            if (!cellHeatmapMode) {
+                FloatingActionButton(onClick = { showList = true }) {
+                    Icon(Icons.Filled.List, contentDescription = "List Devices")
+                }
             }
         }
         
@@ -690,6 +776,7 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                                 val displayName = if (ble.name != "Unknown" && ble.name.isNotEmpty()) ble.name else ble.deviceType
                                 Text("Name: $displayName", fontSize = 13.sp)
                                 Text("RSSI: ${ble.rssi} dBm | Type: ${ble.deviceType}", fontSize = 12.sp, color = Color.Gray)
+                                Text("Last seen: ${formatTimestamp(ble.lastSeen)}", fontSize = 12.sp, color = Color.Gray)
                                 HorizontalDivider(modifier = Modifier.padding(top = 6.dp))
                             }
                         }
@@ -789,7 +876,7 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                                     if (listAps.isEmpty()) {
                                         item { EmptyGroupRow("No WiFi networks in view") }
                                     } else {
-                                        items(listAps.sortedByDescending { it.rssi }, key = { it.bssid }) { ap ->
+                                        items(listAps, key = { it.bssid }) { ap ->
                                             DeviceListRow(
                                                 primary = if (ap.ssid.isNotEmpty()) ap.ssid else "[Hidden]",
                                                 secondary = "${ap.frequency} MHz",
@@ -797,7 +884,9 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                                                 icon = Icons.Filled.Wifi,
                                                 tint = WifiTypeColor,
                                                 onClick = { selectedListAp = ap },
-                                                modifier = Modifier.animateItemPlacement()
+                                                modifier = Modifier.animateItemPlacement(),
+                                                secured = ap.isSecured,
+                                                distanceMeters = estimateWifiDistanceMeters(ap.rssi, ap.frequency)
                                             )
                                         }
                                     }
@@ -816,7 +905,7 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                                     if (listBles.isEmpty()) {
                                         item { EmptyGroupRow("No Bluetooth devices in view") }
                                     } else {
-                                        items(listBles.sortedByDescending { it.rssi }, key = { it.mac }) { ble ->
+                                        items(listBles, key = { it.mac }) { ble ->
                                             DeviceListRow(
                                                 primary = if (ble.name.isNotEmpty()) ble.name else "[Unknown]",
                                                 secondary = ble.deviceType,
@@ -824,7 +913,8 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                                                 icon = Icons.Filled.Bluetooth,
                                                 tint = BleTypeColor,
                                                 onClick = { selectedListBle = ble },
-                                                modifier = Modifier.animateItemPlacement()
+                                                modifier = Modifier.animateItemPlacement(),
+                                                distanceMeters = estimateBleDistanceMeters(ble.rssi)
                                             )
                                         }
                                     }
@@ -843,7 +933,7 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                                     if (listCells.isEmpty()) {
                                         item { EmptyGroupRow("No cell towers in view") }
                                     } else {
-                                        items(listCells.sortedByDescending { it.rssi }, key = { it.cellId }) { cell ->
+                                        items(listCells, key = { it.cellId }) { cell ->
                                             DeviceListRow(
                                                 primary = cell.cellId,
                                                 secondary = cell.networkType,
@@ -851,7 +941,8 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                                                 icon = Icons.Filled.SettingsInputAntenna,
                                                 tint = CellTypeColor,
                                                 onClick = { selectedListCell = cell },
-                                                modifier = Modifier.animateItemPlacement()
+                                                modifier = Modifier.animateItemPlacement(),
+                                                distanceMeters = estimateCellDistanceMeters(cell.rssi)
                                             )
                                         }
                                     }
@@ -872,6 +963,14 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
         // AP detail modal
         if (selectedListAp != null) {
             val ap = selectedListAp!!
+            var apStats by remember(ap.bssid) { mutableStateOf<ObservationStats?>(null) }
+            var testing by remember(ap.bssid) { mutableStateOf(false) }
+            var testResult by remember(ap.bssid) { mutableStateOf<WifiTestResult?>(null) }
+            LaunchedEffect(ap.bssid) {
+                apStats = withContext(Dispatchers.IO) { dbHelper.getObservationStats(ap.bssid) }
+            }
+            val canTest = !ap.isSecured && ap.ssid.isNotEmpty() &&
+                android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q
             AlertDialog(
                 onDismissRequest = { selectedListAp = null },
                 title = { Text(if (ap.ssid.isNotEmpty()) ap.ssid else "[Hidden]", fontWeight = FontWeight.Bold) },
@@ -879,15 +978,66 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                     Column {
                         Text("BSSID: ${ap.bssid}")
                         Text("Vendor: ${VendorLookup.getVendor(ap.bssid)}")
-                        Text("Freq: ${ap.frequency} MHz | Standard: ${ap.wifiStandard}")
+                        val ch = channelFromFrequency(ap.frequency)
+                        Text("Freq: ${ap.frequency} MHz${if (ch > 0) " (ch $ch)" else ""} | ${ap.wifiStandard}")
                         Text("RSSI: ${ap.rssi} dBm | Weight: ${ap.totalWeight.toInt()}")
+                        Text("Estimated distance: ~${formatDistance(estimateWifiDistanceMeters(ap.rssi, ap.frequency))}")
                         val secText = if (ap.securityType.isNotEmpty()) ap.securityType else if (ap.isSecured) "Secured" else "Open"
                         Text("Security: $secText")
+                        val stats = apStats
+                        if (stats != null && stats.count > 0) {
+                            Text("Observations: ${stats.count}")
+                            Text("First seen: ${formatTimestamp(stats.firstSeen)}", fontSize = 12.sp, color = Color.Gray)
+                            Text("Last seen: ${formatTimestamp(stats.lastSeen)}", fontSize = 12.sp, color = Color.Gray)
+                        }
                         Text("Capabilities: ${ap.capabilities}", fontSize = 12.sp, color = Color.Gray)
+
+                        if (testing) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            HorizontalDivider()
+                            Text("Testing. Approve the connect dialog.", fontSize = 12.sp, color = Color.Gray, modifier = Modifier.padding(top = 6.dp))
+                        }
+                        val res = testResult
+                        if (res != null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            HorizontalDivider()
+                            Spacer(modifier = Modifier.height(6.dp))
+                            if (!res.connected) {
+                                Text("Connect failed: ${res.error ?: "unknown"}", color = Color(0xFFC62828), fontWeight = FontWeight.Bold)
+                            } else {
+                                val status = when {
+                                    res.hasInternet -> "Internet OK" to Color(0xFF2E7D32)
+                                    res.captivePortal -> "Captive portal (sign-in required)" to Color(0xFFF9A825)
+                                    else -> "Connected, no internet" to Color(0xFFC62828)
+                                }
+                                Text(status.first, color = status.second, fontWeight = FontWeight.Bold)
+                                if (res.ipAddress.isNotEmpty()) Text("IP: ${res.ipAddress}", fontSize = 12.sp)
+                                if (res.gateway.isNotEmpty()) Text("Gateway: ${res.gateway}", fontSize = 12.sp)
+                                if (res.dns.isNotEmpty()) Text("DNS: ${res.dns}", fontSize = 12.sp)
+                                if (res.linkSpeedMbps >= 0) Text("Link speed: ${res.linkSpeedMbps} Mbps", fontSize = 12.sp)
+                                if (res.latencyMs >= 0) Text("Probe latency: ${res.latencyMs} ms", fontSize = 12.sp)
+                            }
+                        }
                     }
                 },
                 confirmButton = {
                     TextButton(onClick = { selectedListAp = null }) { Text("Close") }
+                },
+                dismissButton = {
+                    if (canTest) {
+                        TextButton(
+                            enabled = !testing,
+                            onClick = {
+                                testing = true
+                                testResult = null
+                                scope.launch {
+                                    val r = WifiTester(appContext).testOpenNetwork(ap.ssid)
+                                    testResult = r
+                                    testing = false
+                                }
+                            }
+                        ) { Text(if (testing) "Testing..." else "Test connect") }
+                    }
                 }
             )
         }
@@ -895,6 +1045,10 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
         // BLE detail modal
         if (selectedListBle != null) {
             val ble = selectedListBle!!
+            var bleStats by remember(ble.mac) { mutableStateOf<ObservationStats?>(null) }
+            LaunchedEffect(ble.mac) {
+                bleStats = withContext(Dispatchers.IO) { dbHelper.getObservationStats(ble.mac) }
+            }
             AlertDialog(
                 onDismissRequest = { selectedListBle = null },
                 title = { Text(if (ble.name.isNotEmpty()) ble.name else "[Unknown]", fontWeight = FontWeight.Bold) },
@@ -903,7 +1057,14 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                         Text("MAC: ${ble.mac}")
                         Text("Vendor: ${VendorLookup.getVendor(ble.mac)}")
                         Text("RSSI: ${ble.rssi} dBm | Weight: ${ble.totalWeight.toInt()}")
+                        Text("Estimated distance: ~${formatDistance(estimateBleDistanceMeters(ble.rssi))}")
                         Text("Type: ${ble.deviceType}")
+                        Text("Last seen: ${formatTimestamp(ble.lastSeen)}")
+                        val stats = bleStats
+                        if (stats != null && stats.count > 0) {
+                            Text("Observations: ${stats.count}")
+                            Text("First seen: ${formatTimestamp(stats.firstSeen)}", fontSize = 12.sp, color = Color.Gray)
+                        }
                     }
                 },
                 confirmButton = {
@@ -915,6 +1076,10 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
         // Cell tower detail modal
         if (selectedListCell != null) {
             val cell = selectedListCell!!
+            var cellStats by remember(cell.cellId) { mutableStateOf<ObservationStats?>(null) }
+            LaunchedEffect(cell.cellId) {
+                cellStats = withContext(Dispatchers.IO) { dbHelper.getObservationStats(cell.cellId) }
+            }
             AlertDialog(
                 onDismissRequest = { selectedListCell = null },
                 title = { Text(cell.cellId, fontWeight = FontWeight.Bold) },
@@ -923,10 +1088,17 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                         Text("Operator: ${cell.owner}")
                         Text("Network: ${cell.networkType}")
                         Text("RSSI: ${cell.rssi} dBm | Weight: ${cell.totalWeight.toInt()}")
+                        Text("Estimated distance: ~${formatDistance(estimateCellDistanceMeters(cell.rssi))} (rough)")
                         Text("MCC/MNC: ${cell.mccMnc}")
                         Text("LAC/TAC: ${cell.lac}")
                         Text("PCI: ${cell.pci}")
                         Text("Band: ${cell.band}")
+                        val stats = cellStats
+                        if (stats != null && stats.count > 0) {
+                            Text("Observations: ${stats.count}")
+                            Text("First seen: ${formatTimestamp(stats.firstSeen)}", fontSize = 12.sp, color = Color.Gray)
+                            Text("Last seen: ${formatTimestamp(stats.lastSeen)}", fontSize = 12.sp, color = Color.Gray)
+                        }
                     }
                 },
                 confirmButton = {
@@ -934,6 +1106,85 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
                 }
             )
         }
+    }
+}
+
+@Composable
+fun HeatmapToggleButton(active: Boolean, onClick: () -> Unit) {
+    // Sized and shaped like the app's FABs (56 dp, 16 dp corners, soft shadow) so it
+    // reads as a peer control; the radial gradient keeps its signal-heatmap identity.
+    val shape = RoundedCornerShape(16.dp)
+    Box(
+        modifier = Modifier
+            .shadow(6.dp, shape)
+            .size(56.dp)
+            .clip(shape)
+            .background(
+                androidx.compose.ui.graphics.Brush.radialGradient(
+                    colors = listOf(Color(0xFFFFEB3B), Color(0xFFFF9800), Color(0xFFD32F2F))
+                )
+            )
+            .then(if (active) Modifier.border(3.dp, Color.White, shape) else Modifier)
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            Icons.Filled.Call,
+            contentDescription = "Cell signal heatmap",
+            tint = Color.White,
+            modifier = Modifier.size(24.dp)
+        )
+    }
+}
+
+@Composable
+fun HeatLegend() {
+    Column(modifier = Modifier.padding(top = 4.dp)) {
+        Box(
+            modifier = Modifier
+                .padding(vertical = 2.dp)
+                .width(120.dp)
+                .height(8.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(
+                    androidx.compose.ui.graphics.Brush.horizontalGradient(
+                        colors = listOf(Color(0xFFD32F2F), Color(0xFFFFC107), Color(0xFF2E7D32))
+                    )
+                )
+        )
+        Row(modifier = Modifier.width(120.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Poor", color = Color.White, fontSize = 10.sp)
+            Text("Good", color = Color.White, fontSize = 10.sp)
+        }
+    }
+}
+
+@Composable
+fun FoundBox(icon: ImageVector, tint: Color, count: Int, enabled: Boolean, onClick: () -> Unit) {
+    val alpha = if (enabled) 1f else 0.3f
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .clickable { onClick() }
+            .background(Color.White.copy(alpha = 0.12f), RoundedCornerShape(6.dp))
+            .padding(horizontal = 6.dp, vertical = 3.dp)
+    ) {
+        Icon(icon, contentDescription = null, tint = tint.copy(alpha = alpha), modifier = Modifier.size(14.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text("$count", color = Color.White.copy(alpha = alpha), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+fun SnifferCheckRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = Color.White, fontSize = 13.sp)
+        Checkbox(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = CheckboxDefaults.colors(uncheckedColor = Color.White)
+        )
     }
 }
 
@@ -1005,7 +1256,7 @@ fun EmptyGroupRow(text: String) {
 }
 
 @Composable
-fun SignalIndicator(rssi: Int) {
+fun SignalIndicator(rssi: Int, distanceMeters: Double? = null) {
     val color = when {
         rssi >= -60 -> Color(0xFF2E7D32)
         rssi >= -80 -> Color(0xFFF9A825)
@@ -1020,6 +1271,9 @@ fun SignalIndicator(rssi: Int) {
         )
         Spacer(modifier = Modifier.height(2.dp))
         Text("$rssi dBm", fontSize = 11.sp, color = Color.Gray)
+        if (distanceMeters != null) {
+            Text("~${formatDistance(distanceMeters)}", fontSize = 10.sp, color = Color.Gray)
+        }
     }
 }
 
@@ -1055,7 +1309,9 @@ fun DeviceListRow(
     icon: ImageVector,
     tint: Color,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    distanceMeters: Double? = null,
+    secured: Boolean? = null
 ) {
     ListItem(
         headlineContent = {
@@ -1065,17 +1321,38 @@ fun DeviceListRow(
             Text(secondary, fontSize = 12.sp, color = Color.Gray, maxLines = 1, overflow = TextOverflow.Ellipsis)
         },
         leadingContent = {
-            Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .background(tint.copy(alpha = 0.15f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+            Box(modifier = Modifier.size(34.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .align(Alignment.TopStart)
+                        .clip(CircleShape)
+                        .background(tint.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+                }
+                // Lock badge marks WiFi rows as secured or open
+                if (secured != null) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(16.dp)
+                            .clip(CircleShape)
+                            .background(Color.White),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            if (secured) Icons.Filled.Lock else Icons.Filled.LockOpen,
+                            contentDescription = if (secured) "Secured" else "Open",
+                            tint = if (secured) Color(0xFF2E7D32) else Color(0xFFE64A19),
+                            modifier = Modifier.size(11.dp)
+                        )
+                    }
+                }
             }
         },
-        trailingContent = { SignalIndicator(rssi) },
+        trailingContent = { SignalIndicator(rssi, distanceMeters) },
         modifier = modifier
             .fillMaxWidth()
             .clickable { onClick() }
@@ -1087,12 +1364,12 @@ fun DeviceListRow(
 fun ScanTimerClock(lastScanTime: Long, isScanning: Boolean) {
     var currentTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
+    // 10 Hz is smooth enough for a sweep hand and avoids recomposing every frame.
     LaunchedEffect(isScanning) {
         if (isScanning) {
             while(true) {
-                androidx.compose.runtime.withFrameMillis {
-                    currentTime = System.currentTimeMillis()
-                }
+                currentTime = System.currentTimeMillis()
+                delay(100L)
             }
         }
     }

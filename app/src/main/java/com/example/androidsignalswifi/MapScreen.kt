@@ -17,16 +17,58 @@ import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
-import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.infowindow.InfoWindow
 import org.osmdroid.views.overlay.Marker
 import android.graphics.Color
 import android.location.Location
 
 import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.RadialGradient
+import android.graphics.Shader
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import org.osmdroid.views.overlay.Overlay
+
+// A geolocated cell-signal reading, quality 0 (weak) to 1 (strong).
+data class HeatSample(val lat: Double, val lon: Double, val quality: Float)
+
+private fun lerp(a: Int, b: Int, t: Float) = (a + (b - a) * t).toInt()
+
+// Green = good signal (quality 1), red = poor (quality 0), through yellow.
+fun heatColor(quality: Float): Int {
+    val q = quality.coerceIn(0f, 1f)
+    return if (q < 0.5f) {
+        val t = q * 2f // red -> yellow
+        Color.rgb(lerp(0xD3, 0xFF, t), lerp(0x2F, 0xC1, t), lerp(0x2F, 0x07, t))
+    } else {
+        val t = (q - 0.5f) * 2f // yellow -> green
+        Color.rgb(lerp(0xFF, 0x2E, t), lerp(0xC1, 0x7D, t), lerp(0x07, 0x32, t))
+    }
+}
+
+// Cloudy signal heatmap: an additive stack of soft radial blobs, one per sample.
+class CellHeatmapOverlay(private val samples: List<HeatSample>) : Overlay() {
+    private val paint = Paint().apply { isAntiAlias = true }
+    override fun draw(c: Canvas, mapView: MapView, shadow: Boolean) {
+        if (shadow || samples.isEmpty()) return
+        val proj = mapView.projection
+        val rPx = proj.metersToEquatorPixels(45f).coerceAtLeast(20f)
+        val pt = android.graphics.Point()
+        val w = mapView.width
+        val h = mapView.height
+        for (s in samples) {
+            proj.toPixels(GeoPoint(s.lat, s.lon), pt)
+            if (pt.x < -rPx || pt.y < -rPx || pt.x > w + rPx || pt.y > h + rPx) continue
+            val base = heatColor(s.quality)
+            val center = Color.argb(120, Color.red(base), Color.green(base), Color.blue(base))
+            val edge = Color.argb(0, Color.red(base), Color.green(base), Color.blue(base))
+            paint.shader = RadialGradient(pt.x.toFloat(), pt.y.toFloat(), rPx, center, edge, Shader.TileMode.CLAMP)
+            c.drawCircle(pt.x.toFloat(), pt.y.toFloat(), rPx, paint)
+        }
+        paint.shader = null
+    }
+}
 
 fun getBitmap(context: android.content.Context, id: Int): Bitmap? {
     val drawable = ContextCompat.getDrawable(context, id) ?: return null
@@ -120,6 +162,21 @@ class UserLocationOverlay(private val location: Location) : Overlay() {
     }
 }
 
+// Draw a small lock badge inside a white circle at the icon's lower-right corner.
+fun withLockBadge(base: Bitmap, badge: Bitmap): Bitmap {
+    val out = base.copy(Bitmap.Config.ARGB_8888, true)
+    val canvas = Canvas(out)
+    val d = base.width * 0.55f
+    val cx = base.width - d / 2f
+    val cy = base.height - d / 2f
+    val circlePaint = Paint().apply { color = Color.WHITE; isAntiAlias = true }
+    canvas.drawCircle(cx, cy, d / 2f, circlePaint)
+    val inset = d * 0.42f
+    val dst = RectF(cx - inset, cy - inset, cx + inset, cy + inset)
+    canvas.drawBitmap(badge, null, dst, Paint(Paint.FILTER_BITMAP_FLAG))
+    return out
+}
+
 fun lightenBitmap(src: Bitmap, factor: Float = 0.35f): Bitmap {
     val result = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(result)
@@ -147,11 +204,14 @@ fun MapScreen(
     isScanning: Boolean = false,
     zoomInTrigger: Int = 0,
     zoomOutTrigger: Int = 0,
+    cellHeatmapMode: Boolean = false,
+    heatSamples: List<HeatSample> = emptyList(),
     onBleGroupClick: (groupKey: String, devices: List<ScannedBle>) -> Unit = { _, _ -> },
     onVisibleBoundsChanged: (BoundingBox) -> Unit = {}
 ) {
     val context = LocalContext.current
-    Configuration.getInstance().load(context, context.getSharedPreferences("osmdroid", 0))
+    // Load once; this hits SharedPreferences and must not run on every recomposition.
+    remember { Configuration.getInstance().load(context, context.getSharedPreferences("osmdroid", 0)) }
     val currentOnVisibleBoundsChanged by rememberUpdatedState(onVisibleBoundsChanged)
 
     var mapViewState by remember { mutableStateOf<MapView?>(null) }
@@ -159,22 +219,39 @@ fun MapScreen(
     var openTooltipId by remember { mutableStateOf<String?>(null) }
     val lastManualMoveTime = remember { longArrayOf(0L) }
 
-    // Cache bitmaps so they're only decoded once
-    val wifiBlueBmp = remember { getBitmap(context, R.drawable.ic_cloud_wifi_blue) }
-    val wifiLightGreenBmp = remember { getBitmap(context, R.drawable.ic_cloud_wifi_light_green) }
-    val wifiDarkGreenBmp = remember { getBitmap(context, R.drawable.ic_cloud_wifi_dark_green) }
+    // Cache drawables so bitmaps are decoded once and one drawable is shared by all markers.
+    // Four wifi combinations: green/red for triangulation state, lock badge for security.
+    val wifiIcons = remember {
+        val green = getBitmap(context, R.drawable.ic_wifi_triangulated)
+        val red = getBitmap(context, R.drawable.ic_wifi_learning)
+        val lock = getBitmap(context, R.drawable.ic_lock_solid)
+        val lockOpen = getBitmap(context, R.drawable.ic_lockopen_solid)
+        fun make(base: Bitmap?, badge: Bitmap?): BitmapDrawable? =
+            if (base != null && badge != null) BitmapDrawable(context.resources, withLockBadge(base, badge))
+            else base?.let { BitmapDrawable(context.resources, it) }
+        mapOf(
+            "triSecured" to make(green, lock),
+            "triOpen" to make(green, lockOpen),
+            "learnSecured" to make(red, lock),
+            "learnOpen" to make(red, lockOpen)
+        )
+    }
     val bleBmp = remember {
         val raw = getBitmap(context, R.drawable.ic_ble_device)
         if (raw != null) Bitmap.createScaledBitmap(raw, (raw.width * 1.25f).toInt(), (raw.height * 1.25f).toInt(), true) else null
     }
+    val bleIcon = remember { bleBmp?.let { BitmapDrawable(context.resources, it) } }
     // Grouped BLE icon: 10% larger than individual + lighter shade
-    val bleGroupBmp = remember {
+    val bleGroupIcon = remember {
         if (bleBmp != null) {
             val scaled = Bitmap.createScaledBitmap(bleBmp, (bleBmp.width * 1.1f).toInt(), (bleBmp.height * 1.1f).toInt(), true)
-            lightenBitmap(scaled)
+            BitmapDrawable(context.resources, lightenBitmap(scaled))
         } else null
     }
-    val cellBmp = remember { getBitmap(context, R.drawable.ic_cell_tower) }
+    val cellIcon = remember { getBitmap(context, R.drawable.ic_cell_tower)?.let { BitmapDrawable(context.resources, it) } }
+    // Snapshot of what the overlays were last built from, so recompositions caused by
+    // unrelated state (bounds reports, timer ticks) skip the expensive rebuild.
+    val lastRendered = remember { arrayOfNulls<Any>(7) }
 
     LaunchedEffect(centerTrigger) {
         if (centerTrigger > 0) {
@@ -238,6 +315,19 @@ fun MapScreen(
         },
         modifier = Modifier.fillMaxSize(),
         update = { mapView ->
+            val locKey = currentLocation?.let { "${it.latitude},${it.longitude}" }
+            val dataChanged = lastRendered[0] !== aps || lastRendered[1] !== bles || lastRendered[2] !== cells ||
+                lastRendered[3] != openTooltipId || lastRendered[4] != locKey ||
+                lastRendered[5] != cellHeatmapMode || lastRendered[6] !== heatSamples
+            if (dataChanged) {
+            lastRendered[0] = aps
+            lastRendered[1] = bles
+            lastRendered[2] = cells
+            lastRendered[3] = openTooltipId
+            lastRendered[4] = locKey
+            lastRendered[5] = cellHeatmapMode
+            lastRendered[6] = heatSamples
+
             val manualMoveActive = System.currentTimeMillis() - lastManualMoveTime[0] < 10000L
 
             org.osmdroid.views.overlay.infowindow.InfoWindow.closeAllInfoWindowsOn(mapView)
@@ -256,117 +346,91 @@ fun MapScreen(
             })
 
             var centerPoint: GeoPoint? = null
-            
-            val groupedAps = aps.groupBy { it.bssid.substringBeforeLast(":") }
-                .entries
-                .sortedBy { entry -> entry.value.maxOfOrNull { it.totalWeight } ?: 0.0 }
+
+            if (cellHeatmapMode) {
+                mapView.overlays.add(CellHeatmapOverlay(heatSamples))
+            } else {
+
+            // Group APs by MAC prefix, then merge groups that share an SSID so mesh nodes
+            // and multi-radio routers collapse into one circle. Union-find over prefixes.
+            val prefixGroups = aps.groupBy { it.bssid.substringBeforeLast(":") }
+            val parent = HashMap<String, String>()
+            prefixGroups.keys.forEach { parent[it] = it }
+            fun find(k: String): String {
+                var r = k
+                while (parent[r] != r) r = parent[r]!!
+                return r
+            }
+            val ssidToPrefix = HashMap<String, String>()
+            for ((prefix, group) in prefixGroups) {
+                for (ap in group) {
+                    val ssid = ap.ssid.trim().lowercase()
+                    if (ssid.isEmpty()) continue
+                    val existing = ssidToPrefix[ssid]
+                    if (existing == null) ssidToPrefix[ssid] = prefix
+                    else parent[find(prefix)] = find(existing)
+                }
+            }
+            val groupedAps = prefixGroups.entries
+                .groupBy { find(it.key) }
+                .map { (root, entries) -> root to entries.flatMap { it.value } }
+                .sortedBy { (_, group) -> group.maxOfOrNull { it.totalWeight } ?: 0.0 }
 
             for ((macPrefix, group) in groupedAps) {
                 val primaryAp = group.maxByOrNull { it.totalWeight } ?: group[0]
-                val point = GeoPoint(primaryAp.estLat, primaryAp.estLon)        
+                val point = GeoPoint(primaryAp.estLat, primaryAp.estLon)
 
                 if (centerPoint == null) centerPoint = point
 
-                val hash = primaryAp.bssid.hashCode()
-                val r = (hash and 0xFF0000) shr 16
-                val g = (hash and 0x00FF00) shr 8
-                val b = (hash and 0x0000FF)
-
-                val radiusMeters = kotlin.math.max(5.0, 1000.0 / kotlin.math.max(10.0, primaryAp.totalWeight))
-
-                val ssids = group.map { if(it.ssid.isNotEmpty()) it.ssid else "[Hidden]" }.distinct().joinToString(", ")
-                val isSecured = group.any { it.isSecured }
                 val titleText = "Vendor: ${VendorLookup.getVendor(primaryAp.bssid)} (Location Wt: ${group.sumOf { it.totalWeight }.toInt()})"
                 val snippetText = group.joinToString("\n") {
                     val secText = if (it.securityType.isNotEmpty()) it.securityType else if (it.isSecured) "Secured" else "Open"
                     val ssidName = it.ssid.takeIf { s -> s.isNotEmpty() } ?: "Hidden"
                     val freqText = "${it.frequency} MHz"
                     val stdText = it.wifiStandard
-                    "[$ssidName] ${it.bssid} - $secText | $freqText | $stdText" 
-                }
+                    val distText = "~${formatDistance(estimateWifiDistanceMeters(it.rssi, it.frequency))}"
+                    "[$ssidName] ${it.bssid} - $secText | $freqText | $stdText | $distText"
+                } + "\nLast seen: ${formatTimestamp(group.maxOf { it.lastSeen })}"
 
                 val identifier = primaryAp.bssid
-                val circle = Polygon(mapView).apply {
+                // Icons instead of shaded circles: dense areas stay readable.
+                // Green = triangulated, red = still learning; lock badge shows security.
+                val isTriangulated = primaryAp.totalWeight > 200.0
+                val isSecured = group.any { it.isSecured }
+                val marker = Marker(mapView).apply {
                     id = identifier
-                    points = Polygon.pointsAsCircle(point, radiusMeters)        
-                    fillPaint.color = Color.argb(100, r, g, b)
-                    outlinePaint.color = Color.argb(255, r, g, b)
-                    outlinePaint.strokeWidth = 3.0f
+                    position = point
                     title = titleText
                     snippet = snippetText
-                    setOnClickListener { polygon, mv, pos ->
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                    setOnMarkerClickListener { m, mv ->
                         openTooltipId = if (openTooltipId == identifier) null else identifier
                         true
                     }
+                    val key = (if (isTriangulated) "tri" else "learn") + (if (isSecured) "Secured" else "Open")
+                    wifiIcons[key]?.let { icon = it }
                 }
-                mapView.overlays.add(circle)
-                if (openTooltipId == identifier && primaryAp.totalWeight <= 200.0) circle.showInfoWindow()
-
-                if (primaryAp.totalWeight > 200.0) {
-                    val isWep = group.any { it.securityType.contains("WEP", ignoreCase = true) }
-
-                    val marker = Marker(mapView).apply {
-                        id = identifier
-                        position = point
-                        title = circle.title
-                        snippet = circle.snippet
-                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)   
-                        setOnMarkerClickListener { m, mv ->
-                            openTooltipId = if (openTooltipId == identifier) null else identifier
-                            true
-                        }
-
-                        val selectedBmp = if (!isSecured) {
-                            wifiLightGreenBmp
-                        } else if (isWep) {
-                            wifiDarkGreenBmp
-                        } else {
-                            wifiBlueBmp
-                        }
-
-                        if (selectedBmp != null) {
-                            icon = BitmapDrawable(context.resources, selectedBmp)
-                        }
-                    }
-                    mapView.overlays.add(marker)
-                    if (openTooltipId == identifier) marker.showInfoWindow()
-                }
+                mapView.overlays.add(marker)
+                if (openTooltipId == identifier) marker.showInfoWindow()
             }
 
             for (cell in cells) {
                 val point = GeoPoint(cell.estLat, cell.estLon)
                 if (centerPoint == null) centerPoint = point
 
-                val radiusMeters = kotlin.math.max(50.0, 5000.0 / kotlin.math.max(10.0, cell.totalWeight))
-
                 val identifier = cell.cellId
-                val circle = Polygon(mapView).apply {
-                    id = identifier
-                    points = Polygon.pointsAsCircle(point, radiusMeters)        
-                    fillPaint.color = Color.argb(60, 255, 69, 0)
-                    outlinePaint.color = Color.argb(200, 255, 69, 0)
-                    outlinePaint.strokeWidth = 3.0f
-                    title = "${cell.owner} ${cell.networkType} Cell: ${cell.cellId}"
-                    snippet = "MCC/MNC: ${cell.mccMnc}\nLAC/TAC: ${cell.lac}\nPCI: ${cell.pci}\nBand: ${cell.band}\nLocation Wt: ${cell.totalWeight.toInt()}"   
-                    setOnClickListener { polygon, mv, pos ->
-                        openTooltipId = if (openTooltipId == identifier) null else identifier
-                        true
-                    }
-                }
-                mapView.overlays.add(circle)
-
                 val marker = Marker(mapView).apply {
                     id = identifier
                     position = point
-                    title = circle.title
-                    snippet = circle.snippet
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM) 
+                    title = "${cell.owner} ${cell.networkType} Cell: ${cell.cellId}"
+                    snippet = "MCC/MNC: ${cell.mccMnc}\nLAC/TAC: ${cell.lac}\nPCI: ${cell.pci}\nBand: ${cell.band}\nEst. distance: ~${formatDistance(estimateCellDistanceMeters(cell.rssi))} (rough)\nLocation Wt: ${cell.totalWeight.toInt()}\nLast seen: ${formatTimestamp(cell.lastSeen)}"
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                     setOnMarkerClickListener { m, mv ->
                         openTooltipId = if (openTooltipId == identifier) null else identifier
                         true
                     }
-                    if (cellBmp != null) {
-                        icon = BitmapDrawable(context.resources, cellBmp)
+                    if (cellIcon != null) {
+                        icon = cellIcon
                     }
                 }
 
@@ -398,10 +462,10 @@ fun MapScreen(
                     position = point
                     if (isGroup) {
                         title = "BLE Group: $groupKey (${group.size} devices)"
-                        snippet = "Devices: ${group.size}\nType: ${primary.deviceType}\nBest RSSI: ${group.maxOf { it.rssi }} dBm"
+                        snippet = "Devices: ${group.size}\nType: ${primary.deviceType}\nBest RSSI: ${group.maxOf { it.rssi }} dBm\nLast seen: ${formatTimestamp(group.maxOf { it.lastSeen })}"
                     } else {
                         title = "BLE: $fixedName"
-                        snippet = "MAC: ${primary.mac}\nVendor: ${VendorLookup.getVendor(primary.mac)}\nType: ${primary.deviceType}\nRSSI: ${primary.rssi} dBm\nLocation Wt: ${primary.totalWeight.toInt()}"
+                        snippet = "MAC: ${primary.mac}\nVendor: ${VendorLookup.getVendor(primary.mac)}\nType: ${primary.deviceType}\nRSSI: ${primary.rssi} dBm\nLocation Wt: ${primary.totalWeight.toInt()}\nLast seen: ${formatTimestamp(primary.lastSeen)}"
                     }
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     setOnMarkerClickListener { m, mv ->
@@ -412,14 +476,15 @@ fun MapScreen(
                         }
                         true
                     }
-                    val bmp = if (isGroup) bleGroupBmp else bleBmp
-                    if (bmp != null) {
-                        icon = BitmapDrawable(context.resources, bmp)
+                    val drawable = if (isGroup) bleGroupIcon else bleIcon
+                    if (drawable != null) {
+                        icon = drawable
                     }
                 }
                 mapView.overlays.add(marker)
                 if (!isGroup && openTooltipId == identifier) marker.showInfoWindow()
             }
+            } // end normal (non-heatmap) overlays
 
             if (!manualMoveActive) {
                 if (isScanning && currentLocation != null) {
@@ -441,6 +506,7 @@ fun MapScreen(
 
             mapView.invalidate()
             mapView.post { currentOnVisibleBoundsChanged(mapView.boundingBox) }
+            }
         }
     )
 }

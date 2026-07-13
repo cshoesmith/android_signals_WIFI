@@ -26,7 +26,8 @@ data class ScannedAp(
     val securityType: String,
     val frequency: Int,
     val wifiStandard: String,
-    val capabilities: String
+    val capabilities: String,
+    val lastSeen: Long = 0L
 )
 
 class WifiSniffer(private val context: Context) {
@@ -94,7 +95,10 @@ class WifiSniffer(private val context: Context) {
                 val capIndex = cursor.getColumnIndex(DatabaseHelper.COL_CAPABILITIES)
                 val caps = if (capIndex >= 0) cursor.getString(capIndex) ?: "" else ""
 
-                loadedList.add(ScannedAp(bssid, ssid, lastRssi, estLat, estLon, isSecuredInt == 1, totalWeight, securityType, freq, wifiStandard, caps))
+                val seenIndex = cursor.getColumnIndex(DatabaseHelper.COL_LAST_SEEN)
+                val lastSeen = if (seenIndex >= 0) cursor.getLong(seenIndex) else 0L
+
+                loadedList.add(ScannedAp(bssid, ssid, lastRssi, estLat, estLon, isSecuredInt == 1, totalWeight, securityType, freq, wifiStandard, caps, lastSeen))
             }
             cursor.close()
             _scannedAps.value = loadedList
@@ -140,6 +144,9 @@ class WifiSniffer(private val context: Context) {
             val db = dbHelper.writableDatabase
             val updatedMap = _scannedAps.value.associateBy { it.bssid }.toMutableMap()
 
+            // One transaction per scan batch instead of per-row commits
+            db.beginTransaction()
+            try {
             for (result in results) {
                 val bssid = result.BSSID ?: continue
                 val ssid = result.SSID ?: ""
@@ -223,7 +230,11 @@ class WifiSniffer(private val context: Context) {
                 }
                 db.insert(DatabaseHelper.TABLE_OBS, null, obsValues)
 
-                updatedMap[bssid] = ScannedAp(bssid, ssid, rssi, estLat, estLon, isSecured, totalWeight, securityType, freq, wifiStandard, caps)
+                updatedMap[bssid] = ScannedAp(bssid, ssid, rssi, estLat, estLon, isSecured, totalWeight, securityType, freq, wifiStandard, caps, ts)
+            }
+            db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
             }
 
             _scannedAps.value = updatedMap.values.sortedByDescending { it.rssi }

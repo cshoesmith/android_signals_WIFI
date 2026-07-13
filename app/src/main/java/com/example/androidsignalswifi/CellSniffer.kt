@@ -29,7 +29,8 @@ data class ScannedCell(
     val lac: String = "",
     val owner: String = "",
     val pci: String = "",
-    val band: String = ""
+    val band: String = "",
+    val lastSeen: Long = 0L
 )
 
 class CellSniffer(private val context: Context) {
@@ -69,8 +70,9 @@ class CellSniffer(private val context: Context) {
                 val owner = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_CELL_OWNER)) ?: ""
                 val pci = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_CELL_PCI)) ?: ""
                 val band = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_CELL_BAND)) ?: ""
-                
-                val sc = ScannedCell(cellId, networkType, mccMnc, rssi, estLat, estLon, totalWeight, lac, owner, pci, band)
+                val lastSeen = cursor.getLong(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_LAST_SEEN))
+
+                val sc = ScannedCell(cellId, networkType, mccMnc, rssi, estLat, estLon, totalWeight, lac, owner, pci, band, lastSeen)
                 loadedList.add(sc)
                 currentScans[cellId] = sc
             }
@@ -219,7 +221,7 @@ class CellSniffer(private val context: Context) {
                 }
                 db.insert(DatabaseHelper.TABLE_OBS, null, obsValues)
 
-                val scanned = ScannedCell(cellId, networkType, mccMnc, rssi, newEstLat, newEstLon, newTotalWeight, lac)
+                val scanned = ScannedCell(cellId, networkType, mccMnc, rssi, newEstLat, newEstLon, newTotalWeight, lac, lastSeen = System.currentTimeMillis())
                 currentScans[cellId] = scanned
             }
             db.setTransactionSuccessful()

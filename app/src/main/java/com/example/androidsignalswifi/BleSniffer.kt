@@ -306,11 +306,14 @@ class BleSniffer(private val context: Context) {
         _isScanning.value = true
         Log.i("BleSniffer", "BLE scan started (interval: ${scanOnMs / 1000}s on / ${scanOffMs / 1000}s off)")
 
+        // BALANCED batches results (~1 callback/device/window) instead of LOW_LATENCY's
+        // continuous flood, cutting callback and DB churn while the map is in use.
+        val scanSettings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
+            .setReportDelay(0L)
+            .build()
         scanJob = CoroutineScope(Dispatchers.Main).launch {
             while (_isScanning.value) {
-                val scanSettings = ScanSettings.Builder()
-                    .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-                    .build()
                 bluetoothLeScanner.startScan(null, scanSettings, scanCallback)
                 Log.d("BleSniffer", "BLE scan window started")
                 delay(scanOnMs)
