@@ -8,13 +8,13 @@ import android.util.Log
 
 data class ObservationStats(val count: Int, val firstSeen: Long, val lastSeen: Long)
 
-data class CellSample(val lat: Double, val lon: Double, val rssi: Int, val networkType: String, val mccMnc: String)
+data class CellSample(val lat: Double, val lon: Double, val rssi: Int, val networkType: String)
 
 class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
     companion object {
         const val DATABASE_NAME = "wifi_sniffer.db"
-        const val DATABASE_VERSION = 9
+        const val DATABASE_VERSION = 10
 
         const val TABLE_APS = "access_points"
         const val COL_BSSID = "bssid"
@@ -50,6 +50,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         const val COL_LON = "lon"
         const val COL_RSSI = "rssi"
         const val COL_TIMESTAMP = "timestamp"
+        const val COL_SUB_ID = "sub_id" // subscription (SIM) that collected the sample; -1 = unknown
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -101,6 +102,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
             "${COL_LAT} REAL," +
             "${COL_LON} REAL," +
             "${COL_RSSI} INTEGER," +
+            "${COL_SUB_ID} INTEGER DEFAULT -1," +
             "${COL_TIMESTAMP} INTEGER)"
         )
     }
@@ -155,6 +157,11 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
                 )
             } catch (e: Exception) {}
         }
+        if (oldVersion < 10) {
+            try {
+                db.execSQL("ALTER TABLE ${TABLE_OBS} ADD COLUMN ${COL_SUB_ID} INTEGER DEFAULT -1")
+            } catch (e: Exception) {}
+        }
     }
 
     // Observations are keyed by BSSID for APs, MAC for BLE, and cell id for towers.
@@ -169,17 +176,34 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
     }
 
     // Geolocated cell signal samples for the heatmap: every observation whose id
-    // matches a known tower, newest first, tagged with that tower's network type.
-    fun getCellSignalSamples(limit: Int = 20000): List<CellSample> {
+    // matches a known tower, newest first. Optionally restricted to one SIM; the
+    // default SIM also includes legacy (untagged, sub_id = -1) samples.
+    fun getCellSignalSamples(subId: Int? = null, includeLegacy: Boolean = false, limit: Int = 20000): List<CellSample> {
+        val where: String
+        val args: Array<String>
+        when {
+            subId == null -> {
+                where = ""
+                args = arrayOf(limit.toString())
+            }
+            includeLegacy -> {
+                where = "WHERE (o.$COL_SUB_ID = ? OR o.$COL_SUB_ID = -1) "
+                args = arrayOf(subId.toString(), limit.toString())
+            }
+            else -> {
+                where = "WHERE o.$COL_SUB_ID = ? "
+                args = arrayOf(subId.toString(), limit.toString())
+            }
+        }
         val out = ArrayList<CellSample>()
         readableDatabase.rawQuery(
-            "SELECT o.$COL_LAT, o.$COL_LON, o.$COL_RSSI, c.$COL_CELL_NETWORK, c.$COL_CELL_MCC_MNC " +
+            "SELECT o.$COL_LAT, o.$COL_LON, o.$COL_RSSI, c.$COL_CELL_NETWORK " +
                 "FROM $TABLE_OBS o JOIN $TABLE_CELLS c ON o.$COL_BSSID = c.$COL_CELL_ID " +
-                "ORDER BY o.$COL_TIMESTAMP DESC LIMIT ?",
-            arrayOf(limit.toString())
+                where + "ORDER BY o.$COL_TIMESTAMP DESC LIMIT ?",
+            args
         ).use { c ->
             while (c.moveToNext()) {
-                out.add(CellSample(c.getDouble(0), c.getDouble(1), c.getInt(2), c.getString(3) ?: "", c.getString(4) ?: ""))
+                out.add(CellSample(c.getDouble(0), c.getDouble(1), c.getInt(2), c.getString(3) ?: ""))
             }
         }
         return out

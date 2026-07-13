@@ -111,17 +111,28 @@ class CellSniffer(private val context: Context) {
         val list = try { sm.activeSubscriptionInfoList } catch (e: Exception) { null } ?: emptyList()
         val defaultSub = SubscriptionManager.getDefaultSubscriptionId()
         val sims = list.map { info: SubscriptionInfo ->
-            val mcc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) info.mccString ?: "" else @Suppress("DEPRECATION") info.mcc.toString()
-            val mnc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) info.mncString ?: "" else @Suppress("DEPRECATION") info.mnc.toString()
+            // Prefer the per-SIM registered/home operator PLMN ("50501" etc), which matches
+            // the MCC/MNC stored on towers. SubscriptionInfo's mcc/mnc is often blank.
+            val tm = telephonyManager.createForSubscriptionId(info.subscriptionId)
+            val plmn = tm.networkOperator?.ifBlank { null }
+                ?: tm.simOperator?.ifBlank { null }
+                ?: run {
+                    val mcc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) info.mccString ?: "" else @Suppress("DEPRECATION") info.mcc.toString()
+                    val mnc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) info.mncString ?: "" else @Suppress("DEPRECATION") info.mnc.toString()
+                    "$mcc$mnc"
+                }
             SimInfo(
                 subId = info.subscriptionId,
                 slotIndex = info.simSlotIndex,
                 carrierName = info.carrierName?.toString()?.ifBlank { "SIM ${info.simSlotIndex + 1}" } ?: "SIM ${info.simSlotIndex + 1}",
-                mccMnc = "$mcc$mnc",
+                mccMnc = plmn,
                 isDefault = info.subscriptionId == defaultSub
             )
         }.sortedBy { it.slotIndex }
-        _activeSims.value = sims
+        if (sims != _activeSims.value) {
+            Log.i("CellSniffer", "Active SIMs: " + sims.joinToString { "${it.carrierName}/${it.mccMnc}/sub${it.subId}${if (it.isDefault) "*" else ""}" })
+            _activeSims.value = sims
+        }
         return sims
     }
 
@@ -141,13 +152,15 @@ class CellSniffer(private val context: Context) {
                     val sims = refreshActiveSims()
                     try {
                         if (sims.size > 1) {
-                            // Sample every SIM each cycle so both carriers are collected in parallel
+                            // Sample every SIM each cycle so both are collected in parallel,
+                            // tagging each observation with the SIM it came from.
                             for (sim in sims) {
                                 val tm = telephonyManager.createForSubscriptionId(sim.subId)
-                                tm.allCellInfo?.let { processCells(it, currentLoc) }
+                                tm.allCellInfo?.let { processCells(it, currentLoc, sim.subId) }
                             }
                         } else {
-                            telephonyManager.allCellInfo?.let { processCells(it, currentLoc) }
+                            val sid = sims.firstOrNull()?.subId ?: SubscriptionManager.getDefaultSubscriptionId()
+                            telephonyManager.allCellInfo?.let { processCells(it, currentLoc, sid) }
                         }
                     } catch (e: Exception) {
                         Log.e("CellSniffer", "Error getting cell info", e)
@@ -164,7 +177,7 @@ class CellSniffer(private val context: Context) {
         _isScanning.value = false
     }
 
-    private fun processCells(cells: List<CellInfo>, location: Location) {
+    private fun processCells(cells: List<CellInfo>, location: Location, subId: Int = -1) {
         val lat = location.latitude
         val lon = location.longitude
 
@@ -261,6 +274,7 @@ class CellSniffer(private val context: Context) {
                     put(DatabaseHelper.COL_LAT, lat)
                     put(DatabaseHelper.COL_LON, lon)
                     put(DatabaseHelper.COL_RSSI, rssi)
+                    put(DatabaseHelper.COL_SUB_ID, subId)
                     put(DatabaseHelper.COL_TIMESTAMP, System.currentTimeMillis())
                 }
                 db.insert(DatabaseHelper.TABLE_OBS, null, obsValues)

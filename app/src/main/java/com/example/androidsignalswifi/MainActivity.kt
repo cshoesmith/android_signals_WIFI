@@ -132,14 +132,20 @@ class MainActivity : ComponentActivity() {
                 var showSplash by rememberSaveable { mutableStateOf(true) }
 
                 LaunchedEffect(Unit) {
-                    delay(2000)
+                    delay(3200)
                     showSplash = false
                 }
 
-                if (showSplash) {
-                    SplashScreen()
-                } else {
-                    MainScreen(wifiSniffer, bleSniffer, cellSniffer)
+                androidx.compose.animation.Crossfade(
+                    targetState = showSplash,
+                    animationSpec = androidx.compose.animation.core.tween(700),
+                    label = "splashCrossfade"
+                ) { splash ->
+                    if (splash) {
+                        SplashScreen()
+                    } else {
+                        MainScreen(wifiSniffer, bleSniffer, cellSniffer)
+                    }
                 }
             }
         }
@@ -180,11 +186,24 @@ fun SplashScreen() {
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Image(
-                painter = painterResource(id = R.drawable.ic_launcher_foreground),
-                contentDescription = "App Logo",
-                modifier = Modifier.size(150.dp)
-            )
+            // Full app logo: the launcher icon's background and foreground layers stacked
+            // and clipped to a rounded square, matching the home-screen icon.
+            Box(
+                modifier = Modifier
+                    .size(150.dp)
+                    .clip(RoundedCornerShape(34.dp))
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.ic_launcher_background),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize()
+                )
+                Image(
+                    painter = painterResource(id = R.drawable.ic_launcher_foreground),
+                    contentDescription = "App Logo",
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
             Spacer(modifier = Modifier.height(16.dp))
             Text("Android Signals WIFI", fontSize = 24.sp, fontWeight = FontWeight.Bold)
             Text("by craftbeers.app", fontSize = 14.sp)
@@ -249,11 +268,10 @@ private const val HEAT_GRID_DEG = 0.00015 // ~16 m grid cells
 
 // Collapse raw samples onto a grid, keeping the best signal ever seen at each cell,
 // so the map shows where a call is most likely to succeed rather than momentary dips.
-fun aggregateHeatSamples(raw: List<CellSample>, targetMccMnc: String? = null): List<HeatSample> {
+fun aggregateHeatSamples(raw: List<CellSample>): List<HeatSample> {
     val grid = HashMap<Long, HeatSample>()
     for (s in raw) {
         if (s.lat == 0.0 && s.lon == 0.0) continue
-        if (!targetMccMnc.isNullOrBlank() && s.mccMnc != targetMccMnc) continue
         val q = cellSignalQuality(s.rssi, s.networkType)
         val latKey = Math.round(s.lat / HEAT_GRID_DEG)
         val lonKey = Math.round(s.lon / HEAT_GRID_DEG)
@@ -342,12 +360,15 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
     val selectedSim = sims.firstOrNull { it.subId == selectedSubId }
 
     // Rebuild the heatmap when entering the mode, on every new cell scan, or on SIM switch.
-    // Filter by the selected SIM's carrier so each SIM reports individually.
+    // Filter by the selected SIM (subscription) so each SIM reports individually, even when
+    // two SIMs share a carrier. The default SIM also shows legacy untagged samples.
     var heatSamples by remember { mutableStateOf<List<HeatSample>>(emptyList()) }
     LaunchedEffect(cellHeatmapMode, cells, selectedSubId) {
         if (cellHeatmapMode) {
-            val mcc = sims.firstOrNull { it.subId == selectedSubId }?.mccMnc
-            heatSamples = withContext(Dispatchers.IO) { aggregateHeatSamples(dbHelper.getCellSignalSamples(), mcc) }
+            val isDefault = sims.firstOrNull { it.subId == selectedSubId }?.isDefault == true
+            heatSamples = withContext(Dispatchers.IO) {
+                aggregateHeatSamples(dbHelper.getCellSignalSamples(subId = selectedSubId, includeLegacy = isDefault))
+            }
         }
     }
 
@@ -457,21 +478,24 @@ fun MainScreen(wifiSniffer: WifiSniffer, bleSniffer: BleSniffer, cellSniffer: Ce
             Column(
                 modifier = Modifier
                     .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-                    .padding(8.dp)
+                    .padding(8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
                     if (cellHeatmapMode) "Cell Signal" else "Devices Found",
                     color = Color.White,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
-                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                    fontSize = 12.sp
                 )
                 if (cellHeatmapMode) {
                     HeatLegend()
                     if (sims.size > 1) {
-                        SimToggleButton(selectedSim?.carrierName ?: "SIM") {
-                            val idx = sims.indexOfFirst { it.subId == selectedSubId }
-                            val next = sims[(if (idx < 0) 0 else idx + 1) % sims.size]
+                        val simIndex = sims.indexOfFirst { it.subId == selectedSubId }.coerceAtLeast(0)
+                        SimToggleButton(
+                            simNumber = simIndex + 1,
+                            carrier = selectedSim?.carrierName ?: ""
+                        ) {
+                            val next = sims[(simIndex + 1) % sims.size]
                             selectedSubId = next.subId
                         }
                     }
@@ -1159,19 +1183,32 @@ fun HeatmapToggleButton(active: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-fun SimToggleButton(label: String, onClick: () -> Unit) {
+fun SimToggleButton(simNumber: Int, carrier: String, onClick: () -> Unit) {
+    val accent = Color(0xFF1565C0)
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .padding(top = 6.dp)
-            .clip(RoundedCornerShape(6.dp))
+            .widthIn(max = 150.dp)
+            .clip(RoundedCornerShape(8.dp))
             .clickable { onClick() }
-            .background(Color.White.copy(alpha = 0.15f), RoundedCornerShape(6.dp))
-            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .background(accent, RoundedCornerShape(8.dp))
+            .padding(horizontal = 8.dp, vertical = 5.dp)
     ) {
-        Icon(Icons.Filled.SwapHoriz, contentDescription = "Switch SIM", tint = Color.White, modifier = Modifier.size(14.dp))
-        Spacer(modifier = Modifier.width(4.dp))
-        Text(label, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Text("SIM $simNumber", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        if (carrier.isNotBlank()) {
+            Spacer(modifier = Modifier.width(5.dp))
+            Text(
+                carrier,
+                color = Color.White.copy(alpha = 0.85f),
+                fontSize = 11.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+        }
+        Spacer(modifier = Modifier.width(6.dp))
+        Icon(Icons.Filled.SwapHoriz, contentDescription = "Switch SIM", tint = Color.White, modifier = Modifier.size(18.dp))
     }
 }
 
